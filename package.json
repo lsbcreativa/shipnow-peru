@@ -1,0 +1,28 @@
+{
+  "name": "shipnow-peru",
+  "version": "1.0.0",
+  "description": "API REST de ShipNow Peru, plataforma de venta y despacho de productos a todo el Peru - Backend III (Coderhouse)",
+  "main": "src/server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [
+    "express",
+    "api-rest",
+    "ecommerce",
+    "peru",
+    "backend"
+  ],
+  "author": "Daniel Andres Sanchez Botta",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongoose": "^8.9.5"
+  }
+}
