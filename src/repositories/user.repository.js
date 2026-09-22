@@ -24,6 +24,14 @@ class UserRepository {
     return UserModel.create(data);
   }
 
+  async insertMany(users) {
+    return UserModel.insertMany(users);
+  }
+
+  async sampleByRole(role, size) {
+    return UserModel.aggregate([{ $match: { role, isActive: true } }, { $sample: { size } }]);
+  }
+
   async updateById(id, changes) {
     return UserModel.findByIdAndUpdate(id, changes, { new: true, runValidators: true }).select(
       DEFAULT_PROJECTION

@@ -16,24 +16,28 @@ API REST para **ShipNow Perú**, una plataforma de venta y despacho de productos
 - [Constantes de dominio](#constantes-de-dominio)
 - [Rutas disponibles](#rutas-disponibles)
 - [Ejemplos de uso](#ejemplos-de-uso)
+- [Módulo de mocking](#módulo-de-mocking)
 - [Manejo de errores](#manejo-de-errores)
 
 ## Temática
 
-**ShipNow Perú** conecta tiendas con clientes en cualquier rincón del país: Lima, Arequipa, Cusco, Trujillo, Piura, Chiclayo y más. Cada producto se publica con su precio en soles (S/), su stock y la ciudad desde la que se despacha, para que el pedido llegue rapidito a donde esté el cliente.
+**ShipNow Perú** conecta tiendas con clientes en cualquier rincón del país: Lima, Arequipa, Cusco, Trujillo, Piura, Chiclayo y más. Cada producto se publica con su precio en soles (S/), su stock y la ciudad desde la que se despacha, y cada compra se convierte en un pedido que un repartidor lleva hasta la puerta del cliente.
 
-La plataforma maneja dos entidades principales en esta entrega:
+La plataforma maneja estas entidades:
 
 - **Productos**: catálogo con precio, stock, categoría y ciudad de despacho. El estado del producto (disponible, sin stock, discontinuado) se calcula solo, según las reglas de negocio.
-- **Usuarios**: las personas que compran en ShipNow Perú, con un rol asignado (`user` o `admin`) que más adelante va a definir qué puede hacer cada quien.
+- **Usuarios**: las personas registradas en ShipNow Perú, con un rol asignado (`cliente`, `repartidor` o `admin`) que define qué hace cada quien en la plataforma.
+- **Pedidos**: la compra que arma un cliente, con sus productos, monto total, ciudad de destino, estado y prioridad de despacho.
+- **Entregas**: el seguimiento de un pedido en la calle, asociado siempre a un pedido y, cuando ya fue asignada, a un repartidor.
 
 ## Estado del proyecto
 
 | Entrega | Alcance | Estado |
 |---|---|---|
 | Pre-entrega 1 | Arquitectura por capas (Controller → Service → Repository) para Productos y Usuarios, configuración de entorno validada y constantes de dominio | Completada |
+| Pre-entrega 2 | Modelos de Pedidos y Entregas, roles `cliente`/`repartidor`, y un módulo de mocking (`/api/mocks`) para generar y cargar datos de prueba sin tocarlos a mano | Completada |
 
-Las siguientes fases (autenticación, roles aplicados con permisos, órdenes de despacho, etc.) se van a ir sumando en las próximas entregas del curso.
+Las siguientes fases (autenticación, permisos por rol, asignación real de repartidores, etc.) se van a ir sumando en las próximas entregas del curso.
 
 ## Tecnologías
 
@@ -44,6 +48,7 @@ Las siguientes fases (autenticación, roles aplicados con permisos, órdenes de 
 | Módulos ESM | Sistema de módulos (`import` / `export`) |
 | dotenv | Carga de variables de entorno |
 | MongoDB + Mongoose | Base de datos y ODM |
+| @faker-js/faker | Generación de datos simulados para el módulo de mocking |
 
 ## Instalación
 
@@ -111,23 +116,30 @@ shipnow-peru/
 │   │   ├── index.js                        # punto de entrada unico a la configuracion
 │   │   └── db.config.js                    # conexion a MongoDB
 │   ├── constants/
-│   │   └── index.js                        # ROLES y PRODUCT_STATUS, objetos congelados
+│   │   └── index.js                        # ROLES, PRODUCT_STATUS, ORDER_STATUS, ORDER_PRIORITY, DELIVERY_STATUS
 │   ├── models/
 │   │   ├── product.model.js                # esquema de Mongoose, sin logica
-│   │   └── user.model.js                   # esquema de Mongoose, sin logica
+│   │   ├── user.model.js                   # esquema de Mongoose, sin logica
+│   │   ├── order.model.js                  # Pedido: cliente, items, monto, ciudad, estado, prioridad
+│   │   └── delivery.model.js               # Entrega: pedido, repartidor (opcional), direccion, estado
 │   ├── repositories/
 │   │   ├── product.repository.js           # unico lugar que importa product.model.js
-│   │   └── user.repository.js              # unico lugar que importa user.model.js
+│   │   ├── user.repository.js              # unico lugar que importa user.model.js
+│   │   ├── order.repository.js             # unico lugar que importa order.model.js
+│   │   └── delivery.repository.js          # unico lugar que importa delivery.model.js
 │   ├── services/
 │   │   ├── product.service.js              # reglas de negocio de productos
-│   │   └── user.service.js                 # reglas de negocio de usuarios
+│   │   ├── user.service.js                 # reglas de negocio de usuarios
+│   │   └── mock.service.js                 # genera y siembra datos de prueba (ver Modulo de mocking)
 │   ├── controllers/
 │   │   ├── product.controller.js           # solo req/res, delega todo al service
-│   │   └── user.controller.js              # solo req/res, delega todo al service
+│   │   ├── user.controller.js              # solo req/res, delega todo al service
+│   │   └── mock.controller.js              # solo req/res, delega todo al mock.service
 │   ├── routes/
 │   │   ├── index.router.js                 # router principal montado en /api
 │   │   ├── product.routes.js               # path -> metodo del controller, nada mas
-│   │   └── user.routes.js                  # path -> metodo del controller, nada mas
+│   │   ├── user.routes.js                  # path -> metodo del controller, nada mas
+│   │   └── mock.routes.js                  # path -> metodo del controller, nada mas
 │   ├── middlewares/
 │   │   ├── not-found.middleware.js
 │   │   └── error-handler.middleware.js     # unico lugar que arma la respuesta de error
@@ -181,7 +193,8 @@ Separarlos así evita dos problemas típicos: un Repository "pasamanos" que solo
 ```js
 export const ROLES = Object.freeze({
   ADMIN: 'admin',
-  USER: 'user',
+  CLIENTE: 'cliente',
+  REPARTIDOR: 'repartidor',
 });
 
 export const PRODUCT_STATUS = Object.freeze({
@@ -189,9 +202,31 @@ export const PRODUCT_STATUS = Object.freeze({
   OUT_OF_STOCK: 'out_of_stock',
   DISCONTINUED: 'discontinued',
 });
+
+export const ORDER_STATUS = Object.freeze({
+  PENDING: 'pending',
+  CONFIRMED: 'confirmed',
+  IN_TRANSIT: 'in_transit',
+  DELIVERED: 'delivered',
+  CANCELLED: 'cancelled',
+});
+
+export const ORDER_PRIORITY = Object.freeze({
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+});
+
+export const DELIVERY_STATUS = Object.freeze({
+  PENDING: 'pending',
+  ASSIGNED: 'assigned',
+  IN_TRANSIT: 'in_transit',
+  DELIVERED: 'delivered',
+  FAILED: 'failed',
+});
 ```
 
-Tanto los modelos de Mongoose (para el `enum` del schema) como los services (para calcular o validar un estado) importan estos objetos en vez de escribir `'admin'` o `'available'` a mano.
+Tanto los modelos de Mongoose (para el `enum` del schema) como los services (para calcular, validar o generar un estado) importan estos objetos en vez de escribir `'admin'` o `'available'` a mano. El módulo de mocking hace exactamente lo mismo: nunca escribe un rol, estado o prioridad como string suelto.
 
 ## Rutas disponibles
 
@@ -207,9 +242,14 @@ Todas las rutas cuelgan del prefijo `/api`.
 | DELETE | `/api/products/:id` | Discontinúa un producto (nunca borra el documento de la base) |
 | GET | `/api/users` | Lista usuarios activos, con filtro por `city` y paginación |
 | GET | `/api/users/:id` | Detalle de un usuario |
-| POST | `/api/users` | Registra un usuario nuevo (siempre con rol `user`) |
+| POST | `/api/users` | Registra un usuario nuevo (siempre con rol `cliente`) |
 | PUT | `/api/users/:id` | Actualiza los datos de un usuario (el `role` no se toca por esta vía) |
 | DELETE | `/api/users/:id` | Desactiva un usuario (baja lógica, no borra el documento) |
+| GET | `/api/mocks/users?qty=N` | Genera `N` usuarios simulados (`cliente`/`repartidor`), sin guardarlos |
+| GET | `/api/mocks/repartidores?qty=N` | Genera `N` usuarios simulados, todos con rol `repartidor`, sin guardarlos |
+| GET | `/api/mocks/pedidos?qty=N` | Genera `N` pedidos simulados con su cliente embebido, sin guardarlos |
+| GET | `/api/mocks/entregas?qty=N` | Genera `N` entregas simuladas con su pedido y, si corresponde, su repartidor, sin guardarlos |
+| POST | `/api/mocks/seed?qty=N&coleccion=X` | Inserta `N` registros de prueba reales en MongoDB (`usuarios`, `repartidores`, `pedidos` o `entregas`) |
 
 ## Ejemplos de uso
 
@@ -256,7 +296,7 @@ curl -X POST http://localhost:8080/api/users \
     "lastName": "Quispe",
     "email": "maria@mail.com",
     "city": "Cusco",
-    "role": "user",
+    "role": "cliente",
     "isActive": true,
     "createdAt": "2026-09-10T14:40:10.203Z",
     "updatedAt": "2026-09-10T14:40:10.203Z"
@@ -268,6 +308,86 @@ curl -X POST http://localhost:8080/api/users \
 
 ```bash
 curl "http://localhost:8080/api/products?category=ropa&page=1&limit=5"
+```
+
+## Módulo de mocking
+
+ShipNow Perú necesita usuarios, repartidores, pedidos y entregas de prueba para poder probar el resto de la API sin cargar cada dato a mano. Para eso existe `src/services/mock.service.js`, montado bajo el router `src/routes/mock.routes.js` en el prefijo `/api/mocks`.
+
+El módulo respeta la misma arquitectura por capas que el resto del proyecto:
+
+```
+router (mock.routes.js)  ->  controller (mock.controller.js)  ->  service (mock.service.js)  ->  repository (user/order/delivery)  ->  modelo de Mongoose
+```
+
+`mock.routes.js` solo conecta paths con métodos del controller, igual que `product.routes.js` o `user.routes.js`. Toda la generación de datos falsos, las relaciones entre entidades y la inserción en MongoDB viven en `mock.service.js`, que a su vez usa los mismos repositories que ya existían (`user.repository.js`) más dos nuevos (`order.repository.js`, `delivery.repository.js`) — nunca toca Mongoose directamente.
+
+### Generar datos simulados (no se guardan en la base)
+
+Estos cuatro endpoints arman objetos en memoria con [`@faker-js/faker`](https://fakerjs.dev/) (nombres en español, ciudades peruanas reales) y responden un array directo, sin tocar MongoDB:
+
+```bash
+curl "http://localhost:8080/api/mocks/users?qty=2"
+```
+
+```json
+[
+  {
+    "firstName": "Jorge Luis",
+    "lastName": "Hinojosa Sáenz",
+    "email": "jorgeluis_hinojosasaenz@test.com",
+    "city": "Huancayo",
+    "role": "cliente"
+  },
+  {
+    "firstName": "Ramona",
+    "lastName": "Cordero Apodaca",
+    "email": "ramona_corderoapodaca@test.com",
+    "city": "Ica",
+    "role": "repartidor"
+  }
+]
+```
+
+> El campo `qty` acepta hasta 50; si no se manda o llega inválido, genera 5 por defecto. Los campos calcan exactamente los del modelo real (`firstName`, `lastName`, `email`, `city`, `role`), para cumplir con que el mock tenga "estructura similar a los modelos reales".
+
+```bash
+curl "http://localhost:8080/api/mocks/repartidores?qty=2"   # todos con role: "repartidor"
+curl "http://localhost:8080/api/mocks/pedidos?qty=1"        # pedido con su cliente embebido
+curl "http://localhost:8080/api/mocks/entregas?qty=2"       # entrega con su pedido y, a veces, su repartidor
+```
+
+Un pedido simulado trae sus `items`, el `totalAmount` ya calculado, `destinationCity`, y un `status`/`priority` sacados de `ORDER_STATUS`/`ORDER_PRIORITY`. Una entrega simulada arma su propio pedido, y solo le asigna `deliveryPerson` cuando el `status` generado no es `pending` (una entrega recién creada todavía no tiene repartidor asignado, igual que en la vida real).
+
+### Cargar datos de prueba en MongoDB
+
+```bash
+curl -X POST "http://localhost:8080/api/mocks/seed?qty=10"
+```
+
+```json
+{ "insertados": 10, "coleccion": "usuarios" }
+```
+
+`coleccion` es opcional (por defecto `usuarios`) y acepta `usuarios`, `repartidores`, `pedidos` o `entregas`:
+
+```bash
+curl -X POST "http://localhost:8080/api/mocks/seed?qty=5&coleccion=repartidores"
+curl -X POST "http://localhost:8080/api/mocks/seed?qty=8&coleccion=pedidos"
+curl -X POST "http://localhost:8080/api/mocks/seed?qty=6&coleccion=entregas"
+```
+
+La siembra es "controlada" en el sentido que pide la consigna: nunca inserta una relación rota.
+
+- Sembrar **pedidos** primero revisa si ya hay suficientes usuarios con rol `cliente` en la base (`userRepository.sampleByRole`); si faltan, crea los que hagan falta antes de crear los pedidos, y cada pedido queda con un `customer` que es el `_id` real de un cliente que sí existe en MongoDB.
+- Sembrar **entregas** hace lo mismo con pedidos existentes (los reutiliza con `$sample` o crea los que falten) y con repartidores, y solo asigna `deliveryPerson` cuando el estado generado no es `pending`.
+- Un `coleccion` inválido responde `400` con el listado de valores aceptados, en vez de insertar cualquier cosa.
+
+Podés verificar la carga con `mongosh` o MongoDB Compass:
+
+```bash
+mongosh "$MONGODB_URI" --eval "db.orders.findOne()"
+mongosh "$MONGODB_URI" --eval "db.deliveries.findOne()"
 ```
 
 ## Manejo de errores

@@ -53,7 +53,7 @@ class UserService {
       lastName,
       email: normalizedEmail,
       city,
-      role: ROLES.USER,
+      role: ROLES.CLIENTE,
     });
   }
 
