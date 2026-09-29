@@ -9,8 +9,13 @@ class OrderRepository {
     return OrderModel.countDocuments(filter);
   }
 
-  async sample(size) {
-    return OrderModel.aggregate([{ $sample: { size } }]);
+  async sample(size, { excludeIds = [] } = {}) {
+    const pipeline = [];
+    if (excludeIds.length > 0) {
+      pipeline.push({ $match: { _id: { $nin: excludeIds } } });
+    }
+    pipeline.push({ $sample: { size } });
+    return OrderModel.aggregate(pipeline);
   }
 }
 

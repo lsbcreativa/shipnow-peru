@@ -8,6 +8,10 @@ class DeliveryRepository {
   async count(filter = {}) {
     return DeliveryModel.countDocuments(filter);
   }
+
+  async findOrderIdsWithDelivery() {
+    return DeliveryModel.distinct('order');
+  }
 }
 
 export const deliveryRepository = new DeliveryRepository();

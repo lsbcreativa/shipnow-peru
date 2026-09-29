@@ -3,7 +3,7 @@ import { ROLES, ORDER_STATUS, ORDER_PRIORITY, DELIVERY_STATUS } from '../constan
 import { userRepository } from '../repositories/user.repository.js';
 import { orderRepository } from '../repositories/order.repository.js';
 import { deliveryRepository } from '../repositories/delivery.repository.js';
-import { AppError } from '../utils/app-error.js';
+import { InvalidMockQuantityError, InvalidMockCollectionError, MockSeedError } from '../errors/index.js';
 
 const PERU_CITIES = [
   'Lima',
@@ -34,9 +34,16 @@ const MAX_QTY = 50;
 const MOCKABLE_ROLES = [ROLES.CLIENTE, ROLES.REPARTIDOR];
 const VALID_COLLECTIONS = ['usuarios', 'repartidores', 'pedidos', 'entregas'];
 
-const clampQty = (qty) => {
+// qty ausente -> valor por defecto. qty presente pero invalido (no numerico, cero o negativo)
+// -> error de dominio, no un default silencioso. qty por encima del tope se recorta, no es "invalido".
+const parseQty = (qty) => {
+  if (qty === undefined || qty === null || qty === '') return DEFAULT_QTY;
+
   const parsed = Number(qty);
-  if (!Number.isInteger(parsed) || parsed < 1) return DEFAULT_QTY;
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new InvalidMockQuantityError(qty);
+  }
+
   return Math.min(parsed, MAX_QTY);
 };
 
@@ -64,10 +71,10 @@ const buildOrderItems = () => Array.from({ length: faker.number.int({ min: 1, ma
 
 const sumItems = (items) => Number(items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0).toFixed(2));
 
-const buildOrderPreview = () => {
+const buildOrderData = (customerId) => {
   const items = buildOrderItems();
   return {
-    customer: buildUser(ROLES.CLIENTE),
+    customer: customerId,
     items,
     totalAmount: sumItems(items),
     destinationCity: randomFrom(PERU_CITIES),
@@ -75,6 +82,8 @@ const buildOrderPreview = () => {
     priority: randomFrom(Object.values(ORDER_PRIORITY)),
   };
 };
+
+const buildOrderPreview = () => buildOrderData(buildUser(ROLES.CLIENTE));
 
 const buildDeliveryAddress = (city) => `${randomFrom(['Av.', 'Jr.', 'Calle'])} ${faker.location.street()}, ${city}`;
 
@@ -93,30 +102,27 @@ const buildDeliveryPreview = () => {
 
 class MockService {
   generateUsers(qty) {
-    return Array.from({ length: clampQty(qty) }, () => buildUser());
+    return Array.from({ length: parseQty(qty) }, () => buildUser());
   }
 
   generateRepartidores(qty) {
-    return Array.from({ length: clampQty(qty) }, () => buildUser(ROLES.REPARTIDOR));
+    return Array.from({ length: parseQty(qty) }, () => buildUser(ROLES.REPARTIDOR));
   }
 
   generateOrders(qty) {
-    return Array.from({ length: clampQty(qty) }, buildOrderPreview);
+    return Array.from({ length: parseQty(qty) }, buildOrderPreview);
   }
 
   generateDeliveries(qty) {
-    return Array.from({ length: clampQty(qty) }, buildDeliveryPreview);
+    return Array.from({ length: parseQty(qty) }, buildDeliveryPreview);
   }
 
   async seed(coleccion = 'usuarios', qty) {
     const normalized = (coleccion || 'usuarios').toLowerCase().trim();
-    const size = clampQty(qty);
+    const size = parseQty(qty);
 
     if (!VALID_COLLECTIONS.includes(normalized)) {
-      throw new AppError(
-        `La coleccion "${coleccion}" no es valida. Usa una de: ${VALID_COLLECTIONS.join(', ')}.`,
-        400
-      );
+      throw new InvalidMockCollectionError(coleccion, VALID_COLLECTIONS);
     }
 
     switch (normalized) {
@@ -129,58 +135,66 @@ class MockService {
       case 'entregas':
         return this._seedDeliveries(size);
       default:
-        throw new AppError(`La coleccion "${coleccion}" no es valida.`, 400);
+        throw new InvalidMockCollectionError(coleccion, VALID_COLLECTIONS);
     }
   }
 
   async _seedUsers(size) {
-    const users = Array.from({ length: size }, () => buildUser());
-    const inserted = await userRepository.insertMany(users);
-    return { insertados: inserted.length, coleccion: 'usuarios' };
+    try {
+      const users = Array.from({ length: size }, () => buildUser());
+      const inserted = await userRepository.insertMany(users);
+      return { insertados: inserted.length, coleccion: 'usuarios' };
+    } catch (error) {
+      throw new MockSeedError('usuarios', error);
+    }
   }
 
   async _seedRepartidores(size) {
-    const inserted = await userRepository.insertMany(
-      Array.from({ length: size }, () => buildUser(ROLES.REPARTIDOR))
-    );
-    return { insertados: inserted.length, coleccion: 'repartidores' };
+    try {
+      const inserted = await userRepository.insertMany(
+        Array.from({ length: size }, () => buildUser(ROLES.REPARTIDOR))
+      );
+      return { insertados: inserted.length, coleccion: 'repartidores' };
+    } catch (error) {
+      throw new MockSeedError('repartidores', error);
+    }
   }
 
   async _seedOrders(size) {
-    const customers = await this._ensureUsersByRole(ROLES.CLIENTE, size);
-    const orders = Array.from({ length: size }, () => {
-      const items = buildOrderItems();
-      return {
-        customer: randomFrom(customers)._id,
-        items,
-        totalAmount: sumItems(items),
-        destinationCity: randomFrom(PERU_CITIES),
-        status: randomFrom(Object.values(ORDER_STATUS)),
-        priority: randomFrom(Object.values(ORDER_PRIORITY)),
-      };
-    });
+    try {
+      const customers = await this._ensureUsersByRole(ROLES.CLIENTE, size);
+      const orders = Array.from({ length: size }, () => buildOrderData(randomFrom(customers)._id));
 
-    const inserted = await orderRepository.insertMany(orders);
-    return { insertados: inserted.length, coleccion: 'pedidos' };
+      const inserted = await orderRepository.insertMany(orders);
+      return { insertados: inserted.length, coleccion: 'pedidos' };
+    } catch (error) {
+      if (error instanceof MockSeedError) throw error;
+      throw new MockSeedError('pedidos', error);
+    }
   }
 
   async _seedDeliveries(size) {
-    const orders = await this._ensureOrders(size);
-    const deliveryPeople = await this._ensureUsersByRole(ROLES.REPARTIDOR, Math.max(1, Math.ceil(size / 2)));
+    try {
+      const orders = await this._ensureOrdersWithoutDelivery(size);
+      const deliveryPeople = await this._ensureUsersByRole(ROLES.REPARTIDOR, Math.max(1, Math.ceil(size / 2)));
 
-    const deliveries = orders.slice(0, size).map((order) => {
-      const status = randomFrom(Object.values(DELIVERY_STATUS));
-      const hasDeliveryPerson = status !== DELIVERY_STATUS.PENDING;
-      return {
-        order: order._id,
-        deliveryPerson: hasDeliveryPerson ? randomFrom(deliveryPeople)._id : null,
-        deliveryAddress: buildDeliveryAddress(order.destinationCity || randomFrom(PERU_CITIES)),
-        status,
-      };
-    });
+      const deliveries = orders.slice(0, size).map((order) => {
+        const status = randomFrom(Object.values(DELIVERY_STATUS));
+        const hasDeliveryPerson = status !== DELIVERY_STATUS.PENDING;
+        return {
+          order: order._id,
+          deliveryPerson: hasDeliveryPerson ? randomFrom(deliveryPeople)._id : null,
+          deliveryAddress: buildDeliveryAddress(order.destinationCity || randomFrom(PERU_CITIES)),
+          status,
+        };
+      });
 
-    const inserted = await deliveryRepository.insertMany(deliveries);
-    return { insertados: inserted.length, coleccion: 'entregas' };
+      const inserted = await deliveryRepository.insertMany(deliveries);
+      return { insertados: inserted.length, coleccion: 'entregas' };
+    } catch (error) {
+      if (error instanceof MockSeedError) throw error;
+      throw new MockSeedError('entregas', error);
+    }
   }
 
   async _ensureUsersByRole(role, minCount) {
@@ -192,23 +206,16 @@ class MockService {
     return [...existing, ...created];
   }
 
-  async _ensureOrders(minCount) {
-    const existing = await orderRepository.sample(minCount);
+  // Solo devuelve pedidos que todavia no tienen una entrega asociada, para no
+  // generar mas de una entrega por pedido cuando el seed se corre varias veces.
+  async _ensureOrdersWithoutDelivery(minCount) {
+    const deliveredOrderIds = await deliveryRepository.findOrderIdsWithDelivery();
+    const existing = await orderRepository.sample(minCount, { excludeIds: deliveredOrderIds });
     if (existing.length >= minCount) return existing;
 
     const missing = minCount - existing.length;
     const customers = await this._ensureUsersByRole(ROLES.CLIENTE, missing);
-    const newOrders = customers.map((customer) => {
-      const items = buildOrderItems();
-      return {
-        customer: customer._id,
-        items,
-        totalAmount: sumItems(items),
-        destinationCity: randomFrom(PERU_CITIES),
-        status: randomFrom(Object.values(ORDER_STATUS)),
-        priority: randomFrom(Object.values(ORDER_PRIORITY)),
-      };
-    });
+    const newOrders = customers.map((customer) => buildOrderData(customer._id));
 
     const created = await orderRepository.insertMany(newOrders);
     return [...existing, ...created];

@@ -1,6 +1,6 @@
 import { userRepository } from '../repositories/user.repository.js';
 import { ROLES } from '../constants/index.js';
-import { AppError } from '../utils/app-error.js';
+import { NotFoundError, ValidationError, ConflictError } from '../errors/index.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -27,7 +27,7 @@ class UserService {
   async getById(id) {
     const user = await userRepository.findById(id);
     if (!user) {
-      throw new AppError('No encontramos ese usuario en ShipNow Peru', 404);
+      throw new NotFoundError('No encontramos ese usuario en ShipNow Peru');
     }
     return user;
   }
@@ -36,16 +36,16 @@ class UserService {
     const { firstName, lastName, email, city } = data;
 
     if (!firstName || !lastName || !email || !city) {
-      throw new AppError('Faltan datos obligatorios del usuario', 400);
+      throw new ValidationError('Faltan datos obligatorios del usuario');
     }
     if (!EMAIL_REGEX.test(email)) {
-      throw new AppError('El correo no tiene un formato valido', 400);
+      throw new ValidationError('El correo no tiene un formato valido');
     }
 
     const normalizedEmail = email.toLowerCase().trim();
     const existing = await userRepository.findByEmail(normalizedEmail);
     if (existing) {
-      throw new AppError('Ya existe un usuario registrado con ese correo', 409);
+      throw new ConflictError('Ya existe un usuario registrado con ese correo');
     }
 
     return userRepository.create({
@@ -66,13 +66,13 @@ class UserService {
 
     if (nextChanges.email) {
       if (!EMAIL_REGEX.test(nextChanges.email)) {
-        throw new AppError('El correo no tiene un formato valido', 400);
+        throw new ValidationError('El correo no tiene un formato valido');
       }
 
       nextChanges.email = nextChanges.email.toLowerCase().trim();
       const existing = await userRepository.findByEmail(nextChanges.email);
       if (existing && String(existing._id) !== String(id)) {
-        throw new AppError('Ya existe un usuario registrado con ese correo', 409);
+        throw new ConflictError('Ya existe un usuario registrado con ese correo');
       }
     }
 

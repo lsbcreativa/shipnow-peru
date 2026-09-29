@@ -36,6 +36,7 @@ La plataforma maneja estas entidades:
 |---|---|---|
 | Pre-entrega 1 | Arquitectura por capas (Controller → Service → Repository) para Productos y Usuarios, configuración de entorno validada y constantes de dominio | Completada |
 | Pre-entrega 2 | Modelos de Pedidos y Entregas, roles `cliente`/`repartidor`, y un módulo de mocking (`/api/mocks`) para generar y cargar datos de prueba sin tocarlos a mano | Completada |
+| Pre-entrega 3 | Capa centralizada de manejo de errores: errores de dominio personalizados, diccionario de errores y middleware global único, aplicada también al módulo de mocking | Completada |
 
 Las siguientes fases (autenticación, permisos por rol, asignación real de repartidores, etc.) se van a ir sumando en las próximas entregas del curso.
 
@@ -141,10 +142,14 @@ shipnow-peru/
 │   │   ├── user.routes.js                  # path -> metodo del controller, nada mas
 │   │   └── mock.routes.js                  # path -> metodo del controller, nada mas
 │   ├── middlewares/
-│   │   ├── not-found.middleware.js
-│   │   └── error-handler.middleware.js     # unico lugar que arma la respuesta de error
+│   │   ├── not-found.middleware.js         # arma un NotFoundError y lo delega (no responde directo)
+│   │   └── error-handler.middleware.js     # unico lugar de todo el proyecto que arma una respuesta de error
+│   ├── errors/
+│   │   ├── error-codes.js                  # diccionario: codigo -> { statusCode, defaultMessage }
+│   │   ├── app-error.js                    # clase base, arma el error a partir de un codigo del diccionario
+│   │   ├── domain-errors.js                # errores personalizados del dominio (ver Manejo de errores)
+│   │   └── index.js                        # punto de entrada unico a la capa de errores
 │   └── utils/
-│       ├── app-error.js                    # error con codigo HTTP asociado
 │       └── http-response.js                # formato unico de respuesta exitosa
 ├── .env.example
 ├── .gitignore
@@ -324,32 +329,35 @@ router (mock.routes.js)  ->  controller (mock.controller.js)  ->  service (mock.
 
 ### Generar datos simulados (no se guardan en la base)
 
-Estos cuatro endpoints arman objetos en memoria con [`@faker-js/faker`](https://fakerjs.dev/) (nombres en español, ciudades peruanas reales) y responden un array directo, sin tocar MongoDB:
+Estos cuatro endpoints arman objetos en memoria con [`@faker-js/faker`](https://fakerjs.dev/) (nombres en español, ciudades peruanas reales) y responden sin tocar MongoDB, con el mismo formato `{ status, payload }` que el resto de la API:
 
 ```bash
 curl "http://localhost:8080/api/mocks/users?qty=2"
 ```
 
 ```json
-[
-  {
-    "firstName": "Jorge Luis",
-    "lastName": "Hinojosa Sáenz",
-    "email": "jorgeluis_hinojosasaenz@test.com",
-    "city": "Huancayo",
-    "role": "cliente"
-  },
-  {
-    "firstName": "Ramona",
-    "lastName": "Cordero Apodaca",
-    "email": "ramona_corderoapodaca@test.com",
-    "city": "Ica",
-    "role": "repartidor"
-  }
-]
+{
+  "status": "success",
+  "payload": [
+    {
+      "firstName": "Jorge Luis",
+      "lastName": "Hinojosa Sáenz",
+      "email": "jorgeluis_hinojosasaenz@test.com",
+      "city": "Huancayo",
+      "role": "cliente"
+    },
+    {
+      "firstName": "Ramona",
+      "lastName": "Cordero Apodaca",
+      "email": "ramona_corderoapodaca@test.com",
+      "city": "Ica",
+      "role": "repartidor"
+    }
+  ]
+}
 ```
 
-> El campo `qty` acepta hasta 50; si no se manda o llega inválido, genera 5 por defecto. Los campos calcan exactamente los del modelo real (`firstName`, `lastName`, `email`, `city`, `role`), para cumplir con que el mock tenga "estructura similar a los modelos reales".
+> Los campos calcan exactamente los del modelo real (`firstName`, `lastName`, `email`, `city`, `role`), para cumplir con que el mock tenga "estructura similar a los modelos reales". Si `qty` no se manda, genera 5 por defecto; si `qty` llega inválido (negativo, cero o no numérico) responde `400` en vez de inventar un valor — ver [Manejo de errores](#manejo-de-errores).
 
 ```bash
 curl "http://localhost:8080/api/mocks/repartidores?qty=2"   # todos con role: "repartidor"
@@ -366,7 +374,7 @@ curl -X POST "http://localhost:8080/api/mocks/seed?qty=10"
 ```
 
 ```json
-{ "insertados": 10, "coleccion": "usuarios" }
+{ "status": "success", "payload": { "insertados": 10, "coleccion": "usuarios" } }
 ```
 
 `coleccion` es opcional (por defecto `usuarios`) y acepta `usuarios`, `repartidores`, `pedidos` o `entregas`:
@@ -380,8 +388,8 @@ curl -X POST "http://localhost:8080/api/mocks/seed?qty=6&coleccion=entregas"
 La siembra es "controlada" en el sentido que pide la consigna: nunca inserta una relación rota.
 
 - Sembrar **pedidos** primero revisa si ya hay suficientes usuarios con rol `cliente` en la base (`userRepository.sampleByRole`); si faltan, crea los que hagan falta antes de crear los pedidos, y cada pedido queda con un `customer` que es el `_id` real de un cliente que sí existe en MongoDB.
-- Sembrar **entregas** hace lo mismo con pedidos existentes (los reutiliza con `$sample` o crea los que falten) y con repartidores, y solo asigna `deliveryPerson` cuando el estado generado no es `pending`.
-- Un `coleccion` inválido responde `400` con el listado de valores aceptados, en vez de insertar cualquier cosa.
+- Sembrar **entregas** hace lo mismo, pero solo elige pedidos que **todavía no tienen entrega** (`deliveryRepository.findOrderIdsWithDelivery()` excluye los que ya la tienen antes de samplear o crear pedidos nuevos), así correr el seed de entregas varias veces nunca genera dos entregas para el mismo pedido. Solo asigna `deliveryPerson` cuando el estado generado no es `pending`.
+- Un `qty` o un `coleccion` inválidos responden `400` sin insertar nada, y si Mongo falla durante la carga (por ejemplo, se corta la conexión a mitad de un `insertMany`) responde `500` con un mensaje claro en vez de reventar sin explicación — ver [Manejo de errores](#manejo-de-errores).
 
 Podés verificar la carga con `mongosh` o MongoDB Compass:
 
@@ -392,11 +400,103 @@ mongosh "$MONGODB_URI" --eval "db.deliveries.findOne()"
 
 ## Manejo de errores
 
-`error-handler.middleware.js` es el único lugar que arma la respuesta de error de toda la API. El resto del código lanza un `AppError(mensaje, statusCode)` y lo deja pasar con `next(error)`.
+Ninguna ruta ni controller arma una respuesta de error por su cuenta. Todo el proyecto lanza un error y lo delega con `next(error)` (o directamente `throw`, dentro de un `async` que el controller envuelve en `try/catch`); `error-handler.middleware.js` es el **único** lugar de toda la API que llama a `res.status().json()` para un error — incluida la ruta que no existe (`not-found.middleware.js` arma un `NotFoundError` y lo delega, no responde directo).
 
-| Status | Cuándo |
-|---|---|
-| `400` | Datos inválidos: falta un campo obligatorio, precio o stock negativo, email con formato incorrecto |
-| `404` | El producto o usuario pedido no existe |
-| `409` | Conflicto con el estado actual del recurso: nombre o correo duplicado, producto ya discontinuado |
-| `500` | Error interno no esperado (el detalle queda en el log del servidor, nunca en la respuesta) |
+### Estructura de la respuesta
+
+Toda respuesta de error tiene la misma forma, sin excepciones:
+
+```json
+{
+  "status": "error",
+  "code": "NOT_FOUND",
+  "message": "No encontramos ese producto en el catalogo de ShipNow Peru"
+}
+```
+
+Cuando el error trae detalle adicional (por ejemplo, una validación de schema de Mongoose con varios campos), aparece un array `details`:
+
+```json
+{
+  "status": "error",
+  "code": "VALIDATION_ERROR",
+  "message": "Los datos enviados no cumplen con el esquema esperado",
+  "details": ["Path `email` is required.", "Path `city` is required."]
+}
+```
+
+### La capa de errores (`src/errors/`)
+
+- **`error-codes.js`** — el diccionario de errores: un objeto `ERROR_CODES` con los códigos válidos, y `ERROR_DICTIONARY`, que mapea cada código a su `statusCode` y su `defaultMessage`. Es la única fuente de verdad de qué status HTTP le corresponde a cada tipo de error.
+- **`app-error.js`** — la clase base `AppError`: recibe un código del diccionario (y opcionalmente un mensaje más específico) y arma `statusCode`, `code` y `message` a partir de ahí. Ningún código fuera de esta capa crea un `AppError` directamente.
+- **`domain-errors.js`** — los errores personalizados del dominio, cada uno ya asociado a su código:
+
+  | Error | Código | Status | Cuándo se usa |
+  |---|---|---|---|
+  | `NotFoundError` | `NOT_FOUND` | 404 | Un usuario o producto pedido por `id` no existe (o la ruta no existe) |
+  | `ValidationError` | `VALIDATION_ERROR` | 400 | Faltan campos, precio/stock negativo, email con formato inválido, `id` con formato inválido |
+  | `ConflictError` | `CONFLICT` | 409 | Email o nombre de producto duplicado, producto ya discontinuado |
+  | `InvalidStatusError` | `INVALID_STATUS` | 400 | Se filtra `/api/products` por un `status` que no es un `PRODUCT_STATUS` válido |
+  | `InvalidMockQuantityError` | `INVALID_MOCK_QUANTITY` | 400 | `qty` en `/api/mocks/*` no es un entero mayor a cero |
+  | `InvalidMockCollectionError` | `INVALID_MOCK_COLLECTION` | 400 | `coleccion` en `/api/mocks/seed` no es `usuarios`, `repartidores`, `pedidos` ni `entregas` |
+  | `MockSeedError` | `MOCK_SEED_FAILED` | 500 | Falla la escritura en MongoDB durante `/api/mocks/seed` (conexión caída, error de Mongo, etc.) |
+
+Todas heredan de `AppError`, así que el middleware las trata exactamente igual sin importar de qué capa vinieron.
+
+### Errores que no lanza el proyecto pero sí puede tirar Mongo
+
+`error-handler.middleware.js` también traduce las fallas del driver que no son un `AppError` (una conexión que se corta, un `_id` mal formado, un índice único violado) a la misma estructura, para que el cliente nunca reciba el formato crudo de Mongoose ni un `500` genérico donde correspondía un `400`:
+
+| Error de Mongoose | Se traduce a | Status |
+|---|---|---|
+| `CastError` (`id` con formato inválido) | `VALIDATION_ERROR` | 400 |
+| `ValidationError` (violó el schema) | `VALIDATION_ERROR` con `details` | 400 |
+| `code: 11000` (índice único duplicado) | `CONFLICT` | 409 |
+| Cualquier otra falla no reconocida | `INTERNAL_ERROR` (mensaje genérico, se loguea el detalle real en el servidor) | 500 |
+
+### Cómo probar los casos inválidos
+
+```bash
+# 404: recurso que no existe
+curl http://localhost:8080/api/products/665f2a3b9c1d4e5f6a7b8c9d
+
+# 400: id con formato invalido (CastError de Mongoose, traducido por el middleware)
+curl http://localhost:8080/api/products/no-es-un-id
+
+# 400: precio negativo (VALIDATION_ERROR, se detecta en el service)
+curl -X POST http://localhost:8080/api/products \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test","description":"Test","category":"test","price":-10,"stock":5,"city":"Lima"}'
+
+# 400: filtrar productos por un estado que no existe (INVALID_STATUS)
+curl "http://localhost:8080/api/products?status=no_existe"
+
+# 409: email duplicado
+curl -X POST http://localhost:8080/api/users -H "Content-Type: application/json" \
+  -d '{"firstName":"Ana","lastName":"Perez","email":"ana@mail.com","city":"Lima"}'
+curl -X POST http://localhost:8080/api/users -H "Content-Type: application/json" \
+  -d '{"firstName":"Otra","lastName":"Persona","email":"ana@mail.com","city":"Cusco"}'
+```
+
+Casos inválidos específicos del módulo de mocks:
+
+```bash
+# 400: qty invalido (cero, negativo o no numerico) — antes se generaba un default silencioso, ahora es un error
+curl "http://localhost:8080/api/mocks/users?qty=0"
+curl "http://localhost:8080/api/mocks/users?qty=-5"
+curl "http://localhost:8080/api/mocks/users?qty=abc"
+curl -X POST "http://localhost:8080/api/mocks/seed?qty=-3"
+
+# 400: coleccion invalida
+curl -X POST "http://localhost:8080/api/mocks/seed?qty=3&coleccion=invalida"
+```
+
+```json
+{
+  "status": "error",
+  "code": "INVALID_MOCK_QUANTITY",
+  "message": "La cantidad \"-5\" no es valida: qty tiene que ser un numero entero mayor a cero"
+}
+```
+
+Para provocar a propósito una falla de carga en MongoDB (`MOCK_SEED_FAILED`, 500) alcanza con apagar la base mientras el servidor sigue corriendo y disparar un seed: `mongosh` cerrado o `MONGODB_URI` apuntando a un Mongo caído hace que el `insertMany` del service falle, y la respuesta sigue siendo un JSON prolijo (`{"status":"error","code":"MOCK_SEED_FAILED", ...}`) en vez de un stack trace o una respuesta colgada.

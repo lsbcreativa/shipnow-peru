@@ -1,3 +1,5 @@
-export const notFoundMiddleware = (req, res) => {
-  res.status(404).json({ status: 'error', message: `La ruta ${req.originalUrl} no existe` });
+import { NotFoundError } from '../errors/index.js';
+
+export const notFoundMiddleware = (req, res, next) => {
+  next(new NotFoundError(`La ruta ${req.originalUrl} no existe`));
 };
