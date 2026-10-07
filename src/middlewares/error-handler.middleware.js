@@ -1,9 +1,14 @@
 import { AppError, ERROR_CODES } from '../errors/index.js';
 import { ValidationError, ConflictError } from '../errors/domain-errors.js';
+import { logger } from '../config/logger.config.js';
 
-// Traduce fallas de Mongoose (no son errores de negocio, son de infraestructura)
-// a la misma forma que un AppError, para que el resto de esta funcion sea uniforme.
+// Traduce fallas que no son nuestras (Mongoose, body-parser) a un AppError,
+// para que el resto de esta funcion sea uniforme sin importar de donde vino el error.
 const translateKnownDriverError = (error) => {
+  if (error.type === 'entity.parse.failed') {
+    return new ValidationError('El body de la peticion no es un JSON valido');
+  }
+
   if (error.name === 'ValidationError' && error.errors) {
     const details = Object.values(error.errors).map((fieldError) => fieldError.message);
     return new ValidationError('Los datos enviados no cumplen con el esquema esperado', details);
@@ -28,7 +33,10 @@ export const errorHandlerMiddleware = (error, req, res, next) => {
   const finalError = knownError || new AppError(ERROR_CODES.INTERNAL_ERROR);
 
   if (finalError.statusCode >= 500) {
-    console.error(error);
+    logger.error(`${req.method} ${req.originalUrl} -> ${finalError.message}`);
+    if (!knownError) logger.error(error.stack);
+  } else {
+    logger.warning(`${req.method} ${req.originalUrl} -> ${finalError.message}`);
   }
 
   res.status(finalError.statusCode).json({

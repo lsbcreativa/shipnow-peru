@@ -1,32 +1,36 @@
 import { productRepository } from '../repositories/product.repository.js';
 import { PRODUCT_STATUS } from '../constants/index.js';
 import { NotFoundError, ValidationError, ConflictError, InvalidStatusError } from '../errors/index.js';
+import { parsePagination } from '../utils/pagination.js';
+import { logger } from '../config/logger.config.js';
 
 const resolveStatusByStock = (stock) => (stock > 0 ? PRODUCT_STATUS.AVAILABLE : PRODUCT_STATUS.OUT_OF_STOCK);
 
 class ProductService {
-  async list({ page = 1, limit = 10, category, city, status } = {}) {
+  async list({ page, limit, category, city, status } = {}) {
     if (status && !Object.values(PRODUCT_STATUS).includes(status)) {
       throw new InvalidStatusError(status, Object.values(PRODUCT_STATUS));
     }
+
+    const { page: parsedPage, limit: parsedLimit } = parsePagination({ page, limit });
 
     const filter = {};
     if (category) filter.category = category;
     if (city) filter.city = city;
     if (status) filter.status = status;
 
-    const skip = (page - 1) * limit;
+    const skip = (parsedPage - 1) * parsedLimit;
     const [items, total] = await Promise.all([
-      productRepository.findAll({ filter, skip, limit }),
+      productRepository.findAll({ filter, skip, limit: parsedLimit }),
       productRepository.count(filter),
     ]);
 
     return {
       items,
-      page,
-      limit,
+      page: parsedPage,
+      limit: parsedLimit,
       total,
-      totalPages: Math.ceil(total / limit) || 1,
+      totalPages: Math.ceil(total / parsedLimit) || 1,
     };
   }
 
@@ -56,7 +60,7 @@ class ProductService {
       throw new ConflictError('Ya existe un producto registrado con ese nombre');
     }
 
-    return productRepository.create({
+    const product = await productRepository.create({
       name,
       description,
       category,
@@ -65,6 +69,9 @@ class ProductService {
       city,
       status: resolveStatusByStock(stock),
     });
+
+    logger.info(`producto creado: "${product.name}" (${product._id})`);
+    return product;
   }
 
   async update(id, changes) {
@@ -86,6 +93,9 @@ class ProductService {
         throw new ValidationError('El stock no puede ser negativo');
       }
       nextChanges.status = resolveStatusByStock(nextChanges.stock);
+      if (nextChanges.status === PRODUCT_STATUS.OUT_OF_STOCK) {
+        logger.warning(`producto "${current.name}" (${id}) se quedo sin stock`);
+      }
     }
 
     return productRepository.updateById(id, nextChanges);

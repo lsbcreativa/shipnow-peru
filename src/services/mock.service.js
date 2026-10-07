@@ -3,7 +3,8 @@ import { ROLES, ORDER_STATUS, ORDER_PRIORITY, DELIVERY_STATUS } from '../constan
 import { userRepository } from '../repositories/user.repository.js';
 import { orderRepository } from '../repositories/order.repository.js';
 import { deliveryRepository } from '../repositories/delivery.repository.js';
-import { InvalidMockQuantityError, InvalidMockCollectionError, MockSeedError } from '../errors/index.js';
+import { InvalidMockQuantityError, InvalidMockCollectionError, MockSeedError, ValidationError } from '../errors/index.js';
+import { logger } from '../config/logger.config.js';
 
 const PERU_CITIES = [
   'Lima',
@@ -34,16 +35,26 @@ const MAX_QTY = 50;
 const MOCKABLE_ROLES = [ROLES.CLIENTE, ROLES.REPARTIDOR];
 const VALID_COLLECTIONS = ['usuarios', 'repartidores', 'pedidos', 'entregas'];
 
-// qty ausente -> valor por defecto. qty presente pero invalido (no numerico, cero o negativo)
-// -> error de dominio, no un default silencioso. qty por encima del tope se recorta, no es "invalido".
+// null = qty ok (o ausente). si no, devuelve el mensaje del problema -> lo usan tanto
+// los generadores sueltos (tiran InvalidMockQuantityError directo) como el seed (que
+// junta este problema con el de la coleccion antes de tirar nada).
+const qtyProblem = (qty) => {
+  if (qty === undefined || qty === null || qty === '') return null;
+  const parsed = Number(qty);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return `La cantidad "${qty}" no es valida: qty tiene que ser un numero entero mayor a cero`;
+  }
+  return null;
+};
+
 const parseQty = (qty) => {
+  if (qtyProblem(qty)) throw new InvalidMockQuantityError(qty);
   if (qty === undefined || qty === null || qty === '') return DEFAULT_QTY;
 
   const parsed = Number(qty);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new InvalidMockQuantityError(qty);
+  if (parsed > MAX_QTY) {
+    logger.warning(`se pidieron ${parsed} registros via mocks, se recorta al tope de ${MAX_QTY}`);
   }
-
   return Math.min(parsed, MAX_QTY);
 };
 
@@ -119,11 +130,23 @@ class MockService {
 
   async seed(coleccion = 'usuarios', qty) {
     const normalized = (coleccion || 'usuarios').toLowerCase().trim();
-    const size = parseQty(qty);
+    const collectionInvalid = !VALID_COLLECTIONS.includes(normalized);
+    const badQty = qtyProblem(qty);
 
-    if (!VALID_COLLECTIONS.includes(normalized)) {
+    // si ambos parametros vienen mal, los devolvemos los dos juntos en vez de
+    // solo el primero que pintaba el codigo viejo (lo marcó el profe).
+    if (collectionInvalid && badQty) {
+      throw new ValidationError('Hay mas de un dato invalido en la peticion de seed', [
+        `La coleccion "${coleccion}" no es valida. Usa una de: ${VALID_COLLECTIONS.join(', ')}.`,
+        badQty,
+      ]);
+    }
+
+    if (collectionInvalid) {
       throw new InvalidMockCollectionError(coleccion, VALID_COLLECTIONS);
     }
+
+    const size = parseQty(qty);
 
     switch (normalized) {
       case 'usuarios':
@@ -143,6 +166,7 @@ class MockService {
     try {
       const users = Array.from({ length: size }, () => buildUser());
       const inserted = await userRepository.insertMany(users);
+      logger.info(`mocks: se cargaron ${inserted.length} usuarios de prueba`);
       return { insertados: inserted.length, coleccion: 'usuarios' };
     } catch (error) {
       throw new MockSeedError('usuarios', error);
@@ -154,6 +178,7 @@ class MockService {
       const inserted = await userRepository.insertMany(
         Array.from({ length: size }, () => buildUser(ROLES.REPARTIDOR))
       );
+      logger.info(`mocks: se cargaron ${inserted.length} repartidores de prueba`);
       return { insertados: inserted.length, coleccion: 'repartidores' };
     } catch (error) {
       throw new MockSeedError('repartidores', error);
@@ -166,6 +191,7 @@ class MockService {
       const orders = Array.from({ length: size }, () => buildOrderData(randomFrom(customers)._id));
 
       const inserted = await orderRepository.insertMany(orders);
+      logger.info(`mocks: se cargaron ${inserted.length} pedidos de prueba`);
       return { insertados: inserted.length, coleccion: 'pedidos' };
     } catch (error) {
       if (error instanceof MockSeedError) throw error;
@@ -190,6 +216,7 @@ class MockService {
       });
 
       const inserted = await deliveryRepository.insertMany(deliveries);
+      logger.info(`mocks: se cargaron ${inserted.length} entregas de prueba`);
       return { insertados: inserted.length, coleccion: 'entregas' };
     } catch (error) {
       if (error instanceof MockSeedError) throw error;

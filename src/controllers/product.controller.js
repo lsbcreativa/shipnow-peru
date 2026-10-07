@@ -4,13 +4,7 @@ import { successResponse } from '../utils/http-response.js';
 export const listProducts = async (req, res, next) => {
   try {
     const { page, limit, category, city, status } = req.query;
-    const result = await productService.list({
-      page: page ? Number(page) : undefined,
-      limit: limit ? Number(limit) : undefined,
-      category,
-      city,
-      status,
-    });
+    const result = await productService.list({ page, limit, category, city, status });
     successResponse(res, 200, result);
   } catch (error) {
     next(error);

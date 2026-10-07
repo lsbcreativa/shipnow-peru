@@ -18,6 +18,7 @@ API REST para **ShipNow Perú**, una plataforma de venta y despacho de productos
 - [Ejemplos de uso](#ejemplos-de-uso)
 - [Módulo de mocking](#módulo-de-mocking)
 - [Manejo de errores](#manejo-de-errores)
+- [Logging](#logging)
 
 ## Temática
 
@@ -37,6 +38,7 @@ La plataforma maneja estas entidades:
 | Pre-entrega 1 | Arquitectura por capas (Controller → Service → Repository) para Productos y Usuarios, configuración de entorno validada y constantes de dominio | Completada |
 | Pre-entrega 2 | Modelos de Pedidos y Entregas, roles `cliente`/`repartidor`, y un módulo de mocking (`/api/mocks`) para generar y cargar datos de prueba sin tocarlos a mano | Completada |
 | Pre-entrega 3 | Capa centralizada de manejo de errores: errores de dominio personalizados, diccionario de errores y middleware global único, aplicada también al módulo de mocking | Completada |
+| Pre-entrega 4 | Logging con Winston (consola + archivo con rotación), conectado al middleware de errores y al módulo de mocking | Completada |
 
 Las siguientes fases (autenticación, permisos por rol, asignación real de repartidores, etc.) se van a ir sumando en las próximas entregas del curso.
 
@@ -50,6 +52,7 @@ Las siguientes fases (autenticación, permisos por rol, asignación real de repa
 | dotenv | Carga de variables de entorno |
 | MongoDB + Mongoose | Base de datos y ODM |
 | @faker-js/faker | Generación de datos simulados para el módulo de mocking |
+| Winston + winston-daily-rotate-file | Logging centralizado, con rotación de archivos |
 
 ## Instalación
 
@@ -115,7 +118,8 @@ shipnow-peru/
 │   ├── config/
 │   │   ├── env.config.js                   # carga dotenv y valida las variables criticas
 │   │   ├── index.js                        # punto de entrada unico a la configuracion
-│   │   └── db.config.js                    # conexion a MongoDB
+│   │   ├── db.config.js                    # conexion a MongoDB
+│   │   └── logger.config.js                # instancia de Winston (ver Logging)
 │   ├── constants/
 │   │   └── index.js                        # ROLES, PRODUCT_STATUS, ORDER_STATUS, ORDER_PRIORITY, DELIVERY_STATUS
 │   ├── models/
@@ -135,12 +139,14 @@ shipnow-peru/
 │   ├── controllers/
 │   │   ├── product.controller.js           # solo req/res, delega todo al service
 │   │   ├── user.controller.js              # solo req/res, delega todo al service
-│   │   └── mock.controller.js              # solo req/res, delega todo al mock.service
+│   │   ├── mock.controller.js              # solo req/res, delega todo al mock.service
+│   │   └── log-test.controller.js          # endpoint de diagnostico del logger
 │   ├── routes/
 │   │   ├── index.router.js                 # router principal montado en /api
 │   │   ├── product.routes.js               # path -> metodo del controller, nada mas
 │   │   ├── user.routes.js                  # path -> metodo del controller, nada mas
-│   │   └── mock.routes.js                  # path -> metodo del controller, nada mas
+│   │   ├── mock.routes.js                  # path -> metodo del controller, nada mas
+│   │   └── log-test.routes.js              # /api/logs/test
 │   ├── middlewares/
 │   │   ├── not-found.middleware.js         # arma un NotFoundError y lo delega (no responde directo)
 │   │   └── error-handler.middleware.js     # unico lugar de todo el proyecto que arma una respuesta de error
@@ -150,7 +156,9 @@ shipnow-peru/
 │   │   ├── domain-errors.js                # errores personalizados del dominio (ver Manejo de errores)
 │   │   └── index.js                        # punto de entrada unico a la capa de errores
 │   └── utils/
-│       └── http-response.js                # formato unico de respuesta exitosa
+│       ├── http-response.js                # formato unico de respuesta exitosa
+│       └── pagination.js                   # valida page/limit, los usan products y users
+├── logs/                                   # se crea solo al arrancar, no va al repo (ver Logging)
 ├── .env.example
 ├── .gitignore
 ├── package.json
@@ -255,6 +263,7 @@ Todas las rutas cuelgan del prefijo `/api`.
 | GET | `/api/mocks/pedidos?qty=N` | Genera `N` pedidos simulados con su cliente embebido, sin guardarlos |
 | GET | `/api/mocks/entregas?qty=N` | Genera `N` entregas simuladas con su pedido y, si corresponde, su repartidor, sin guardarlos |
 | POST | `/api/mocks/seed?qty=N&coleccion=X` | Inserta `N` registros de prueba reales en MongoDB (`usuarios`, `repartidores`, `pedidos` o `entregas`) |
+| GET | `/api/logs/test` | Dispara un log de cada nivel (debug/http/info/warning/error/fatal), para chequear que el logger anda bien |
 
 ## Ejemplos de uso
 
@@ -447,12 +456,15 @@ Todas heredan de `AppError`, así que el middleware las trata exactamente igual 
 
 `error-handler.middleware.js` también traduce las fallas del driver que no son un `AppError` (una conexión que se corta, un `_id` mal formado, un índice único violado) a la misma estructura, para que el cliente nunca reciba el formato crudo de Mongoose ni un `500` genérico donde correspondía un `400`:
 
-| Error de Mongoose | Se traduce a | Status |
+| Error de Mongoose / Express | Se traduce a | Status |
 |---|---|---|
 | `CastError` (`id` con formato inválido) | `VALIDATION_ERROR` | 400 |
 | `ValidationError` (violó el schema) | `VALIDATION_ERROR` con `details` | 400 |
 | `code: 11000` (índice único duplicado) | `CONFLICT` | 409 |
+| body con JSON mal formado (`express.json()`) | `VALIDATION_ERROR` | 400 |
 | Cualquier otra falla no reconocida | `INTERNAL_ERROR` (mensaje genérico, se loguea el detalle real en el servidor) | 500 |
+
+(el de JSON mal formado antes caía directo al 500 genérico, lo corregí en esta misma entrega)
 
 ### Cómo probar los casos inválidos
 
@@ -470,6 +482,13 @@ curl -X POST http://localhost:8080/api/products \
 
 # 400: filtrar productos por un estado que no existe (INVALID_STATUS)
 curl "http://localhost:8080/api/products?status=no_existe"
+
+# 400: body con JSON invalido
+curl -X POST http://localhost:8080/api/products -H "Content-Type: application/json" -d '{ esto no es json'
+
+# 400: page/limit invalidos (antes un limit=abc rompia la paginacion en silencio)
+curl "http://localhost:8080/api/products?limit=abc"
+curl "http://localhost:8080/api/users?page=-1"
 
 # 409: email duplicado
 curl -X POST http://localhost:8080/api/users -H "Content-Type: application/json" \
@@ -489,14 +508,65 @@ curl -X POST "http://localhost:8080/api/mocks/seed?qty=-3"
 
 # 400: coleccion invalida
 curl -X POST "http://localhost:8080/api/mocks/seed?qty=3&coleccion=invalida"
+
+# 400: qty y coleccion invalidos al mismo tiempo -> reporta los dos, no solo el primero
+curl -X POST "http://localhost:8080/api/mocks/seed?qty=-5&coleccion=invalida"
 ```
 
 ```json
 {
   "status": "error",
-  "code": "INVALID_MOCK_QUANTITY",
-  "message": "La cantidad \"-5\" no es valida: qty tiene que ser un numero entero mayor a cero"
+  "code": "VALIDATION_ERROR",
+  "message": "Hay mas de un dato invalido en la peticion de seed",
+  "details": [
+    "La coleccion \"invalida\" no es valida. Usa una de: usuarios, repartidores, pedidos, entregas.",
+    "La cantidad \"-5\" no es valida: qty tiene que ser un numero entero mayor a cero"
+  ]
 }
+```
+
+Si solo se pasan de la raya con `qty` (por ejemplo `qty=500`), no es un error — se recorta a 50 y queda un log de nivel `warning` avisando que se recortó (ver [Logging](#logging)).
+
+## Logging
+
+Antes esto era puro `console.log` repartido por donde sea. Ahora todo pasa por un logger de [Winston](https://github.com/winstonjs/winston) armado en `src/config/logger.config.js`, con 6 niveles (de más a menos grave):
+
+`fatal` · `error` · `warning` · `info` · `http` · `debug`
+
+En desarrollo (`NODE_ENV=development`) se ve todo, incluido `debug`. En producción se filtra desde `info` para arriba — esto lo decide una sola línea en `logger.config.js` leyendo `config.nodeEnv`, que ya viene validado desde el Módulo 1.
+
+¿Dónde se usa, puntualmente?
+
+- `server.js` y `db.config.js` loguean el arranque: servidor levantado (`info`), conexión a Mongo ok (`info`) o si falla, `fatal` y se corta el proceso.
+- `error-handler.middleware.js` loguea cada error que pasa: si el status es menor a 500 (un 400 o 404, algo "esperado") queda como `warning`; si es 500 queda como `error`, con el stack si no era un error nuestro.
+- El módulo de mocks avisa con `info` cuánto insertó en cada seed, y con `warning` si alguien pidió un `qty` tan alto que hubo que recortarlo.
+- `product.service.js` deja un `info` cuando se crea un producto y un `warning` si se queda sin stock.
+
+### Archivos y rotación
+
+Solo los niveles `error` y `fatal` quedan guardados en disco, en `logs/error-<fecha>.log` (uno por día, gracias a `winston-daily-rotate-file`). Se guardan 14 días y después se borran solos. La carpeta `logs/` está en el `.gitignore` — se crea sola la primera vez que corre el server, no hace falta crearla a mano ni subirla al repo.
+
+### Probarlo
+
+```bash
+curl http://localhost:8080/api/logs/test
+```
+
+Dispara los 6 niveles de una. En la consola se ven todos (si estás en desarrollo); en `logs/error-<fecha>.log` solo deberían quedar las líneas de `error` y `fatal`:
+
+```
+2026-10-07 11:18:19 [debug]   log de prueba - nivel debug
+2026-10-07 11:18:19 [http]    log de prueba - nivel http
+2026-10-07 11:18:19 [info]    log de prueba - nivel info
+2026-10-07 11:18:19 [warning] log de prueba - nivel warning
+2026-10-07 11:18:19 [error]   log de prueba - nivel error
+2026-10-07 11:18:19 [fatal]   log de prueba - nivel fatal
+```
+
+```bash
+cat logs/error-*.log
+# 2026-10-07 11:18:19 [error] log de prueba - nivel error
+# 2026-10-07 11:18:19 [fatal] log de prueba - nivel fatal
 ```
 
 Para provocar a propósito una falla de carga en MongoDB (`MOCK_SEED_FAILED`, 500) alcanza con apagar la base mientras el servidor sigue corriendo y disparar un seed: `mongosh` cerrado o `MONGODB_URI` apuntando a un Mongo caído hace que el `insertMany` del service falle, y la respuesta sigue siendo un JSON prolijo (`{"status":"error","code":"MOCK_SEED_FAILED", ...}`) en vez de un stack trace o una respuesta colgada.

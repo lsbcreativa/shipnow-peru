@@ -4,11 +4,7 @@ import { successResponse } from '../utils/http-response.js';
 export const listUsers = async (req, res, next) => {
   try {
     const { page, limit, city } = req.query;
-    const result = await userService.list({
-      page: page ? Number(page) : undefined,
-      limit: limit ? Number(limit) : undefined,
-      city,
-    });
+    const result = await userService.list({ page, limit, city });
     successResponse(res, 200, result);
   } catch (error) {
     next(error);

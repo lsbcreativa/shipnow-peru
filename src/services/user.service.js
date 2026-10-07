@@ -1,26 +1,29 @@
 import { userRepository } from '../repositories/user.repository.js';
 import { ROLES } from '../constants/index.js';
 import { NotFoundError, ValidationError, ConflictError } from '../errors/index.js';
+import { parsePagination } from '../utils/pagination.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 class UserService {
-  async list({ page = 1, limit = 10, city } = {}) {
+  async list({ page, limit, city } = {}) {
+    const { page: parsedPage, limit: parsedLimit } = parsePagination({ page, limit });
+
     const filter = {};
     if (city) filter.city = city;
 
-    const skip = (page - 1) * limit;
+    const skip = (parsedPage - 1) * parsedLimit;
     const [items, total] = await Promise.all([
-      userRepository.findAll({ filter, skip, limit }),
+      userRepository.findAll({ filter, skip, limit: parsedLimit }),
       userRepository.count(filter),
     ]);
 
     return {
       items,
-      page,
-      limit,
+      page: parsedPage,
+      limit: parsedLimit,
       total,
-      totalPages: Math.ceil(total / limit) || 1,
+      totalPages: Math.ceil(total / parsedLimit) || 1,
     };
   }
 
