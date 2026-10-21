@@ -3,6 +3,7 @@ import productRoutes from './product.routes.js';
 import userRoutes from './user.routes.js';
 import mockRoutes from './mock.routes.js';
 import logTestRoutes from './log-test.routes.js';
+import docsRoutes from './docs.routes.js';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/products', productRoutes);
 router.use('/users', userRoutes);
 router.use('/mocks', mockRoutes);
 router.use('/logs', logTestRoutes);
+router.use('/docs', docsRoutes);
 
 export default router;

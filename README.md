@@ -19,6 +19,7 @@ API REST para **ShipNow Perú**, una plataforma de venta y despacho de productos
 - [Módulo de mocking](#módulo-de-mocking)
 - [Manejo de errores](#manejo-de-errores)
 - [Logging](#logging)
+- [Documentación con Swagger](#documentación-con-swagger)
 
 ## Temática
 
@@ -39,6 +40,7 @@ La plataforma maneja estas entidades:
 | Pre-entrega 2 | Modelos de Pedidos y Entregas, roles `cliente`/`repartidor`, y un módulo de mocking (`/api/mocks`) para generar y cargar datos de prueba sin tocarlos a mano | Completada |
 | Pre-entrega 3 | Capa centralizada de manejo de errores: errores de dominio personalizados, diccionario de errores y middleware global único, aplicada también al módulo de mocking | Completada |
 | Pre-entrega 4 | Logging con Winston (consola + archivo con rotación), conectado al middleware de errores y al módulo de mocking | Completada |
+| Pre-entrega 5 | Documentación interactiva con Swagger (`/api/docs`): info general, tags, schemas reutilizables y errores reales documentados | Completada |
 
 Las siguientes fases (autenticación, permisos por rol, asignación real de repartidores, etc.) se van a ir sumando en las próximas entregas del curso.
 
@@ -53,6 +55,7 @@ Las siguientes fases (autenticación, permisos por rol, asignación real de repa
 | MongoDB + Mongoose | Base de datos y ODM |
 | @faker-js/faker | Generación de datos simulados para el módulo de mocking |
 | Winston + winston-daily-rotate-file | Logging centralizado, con rotación de archivos |
+| swagger-ui-express | Documentación interactiva de la API en `/api/docs` |
 
 ## Instalación
 
@@ -119,7 +122,8 @@ shipnow-peru/
 │   │   ├── env.config.js                   # carga dotenv y valida las variables criticas
 │   │   ├── index.js                        # punto de entrada unico a la configuracion
 │   │   ├── db.config.js                    # conexion a MongoDB
-│   │   └── logger.config.js                # instancia de Winston (ver Logging)
+│   │   ├── logger.config.js                # instancia de Winston (ver Logging)
+│   │   └── swagger.config.js               # spec de OpenAPI a mano, nada de esto lo saben las rutas
 │   ├── constants/
 │   │   └── index.js                        # ROLES, PRODUCT_STATUS, ORDER_STATUS, ORDER_PRIORITY, DELIVERY_STATUS
 │   ├── models/
@@ -146,7 +150,8 @@ shipnow-peru/
 │   │   ├── product.routes.js               # path -> metodo del controller, nada mas
 │   │   ├── user.routes.js                  # path -> metodo del controller, nada mas
 │   │   ├── mock.routes.js                  # path -> metodo del controller, nada mas
-│   │   └── log-test.routes.js              # /api/logs/test
+│   │   ├── log-test.routes.js              # /api/logs/test
+│   │   └── docs.routes.js                  # monta swagger-ui-express en /api/docs
 │   ├── middlewares/
 │   │   ├── not-found.middleware.js         # arma un NotFoundError y lo delega (no responde directo)
 │   │   └── error-handler.middleware.js     # unico lugar de todo el proyecto que arma una respuesta de error
@@ -264,6 +269,7 @@ Todas las rutas cuelgan del prefijo `/api`.
 | GET | `/api/mocks/entregas?qty=N` | Genera `N` entregas simuladas con su pedido y, si corresponde, su repartidor, sin guardarlos |
 | POST | `/api/mocks/seed?qty=N&coleccion=X` | Inserta `N` registros de prueba reales en MongoDB (`usuarios`, `repartidores`, `pedidos` o `entregas`) |
 | GET | `/api/logs/test` | Dispara un log de cada nivel (debug/http/info/warning/error/fatal), para chequear que el logger anda bien |
+| GET | `/api/docs` | Swagger UI, documentación interactiva de toda esta tabla |
 
 ## Ejemplos de uso
 
@@ -527,6 +533,8 @@ curl -X POST "http://localhost:8080/api/mocks/seed?qty=-5&coleccion=invalida"
 
 Si solo se pasan de la raya con `qty` (por ejemplo `qty=500`), no es un error — se recorta a 50 y queda un log de nivel `warning` avisando que se recortó (ver [Logging](#logging)).
 
+Para provocar a propósito una falla de carga en MongoDB (`MOCK_SEED_FAILED`, 500) alcanza con apagar la base mientras el servidor sigue corriendo y disparar un seed: `mongosh` cerrado o `MONGODB_URI` apuntando a un Mongo caído hace que el `insertMany` del service falle, y la respuesta sigue siendo un JSON prolijo (`{"status":"error","code":"MOCK_SEED_FAILED", ...}`) en vez de un stack trace o una respuesta colgada.
+
 ## Logging
 
 Antes esto era puro `console.log` repartido por donde sea. Ahora todo pasa por un logger de [Winston](https://github.com/winstonjs/winston) armado en `src/config/logger.config.js`, con 6 niveles (de más a menos grave):
@@ -569,4 +577,20 @@ cat logs/error-*.log
 # 2026-10-07 11:18:19 [fatal] log de prueba - nivel fatal
 ```
 
-Para provocar a propósito una falla de carga en MongoDB (`MOCK_SEED_FAILED`, 500) alcanza con apagar la base mientras el servidor sigue corriendo y disparar un seed: `mongosh` cerrado o `MONGODB_URI` apuntando a un Mongo caído hace que el `insertMany` del service falle, y la respuesta sigue siendo un JSON prolijo (`{"status":"error","code":"MOCK_SEED_FAILED", ...}`) en vez de un stack trace o una respuesta colgada.
+## Documentación con Swagger
+
+```bash
+npm run dev
+# y abrís http://localhost:8080/api/docs en el navegador
+```
+
+Ahí está Swagger UI, con toda la API probable desde el navegador (botón "Try it out" en cada endpoint). El spec de OpenAPI está escrito a mano en `src/config/swagger.config.js` — ni swagger-jsdoc ni nada que lea comentarios de las rutas, es un objeto JS que arma la doc entera, y las rutas (`src/routes/*.routes.js`) no tienen ni idea de que esto existe. Lo único que toca rutas es `docs.routes.js`, y lo único que hace es montar `swagger-ui-express` apuntando al spec.
+
+Tags usados: **Products**, **Users**, **Orders**, **Deliveries**, **Mocks** y **Logger**. Dos aclaraciones de las que ya hablamos en el chat pero quedan documentadas acá también:
+
+- ShipNow no tiene un CRUD real de pedidos ni de entregas todavía (eso vendría en una entrega futura), así que **Orders** y **Deliveries** son los tags de los endpoints de mocks que generan esa forma de dato (`/mocks/pedidos`, `/mocks/entregas`) — van etiquetados con los dos tags a la vez (`Mocks` + `Orders`/`Deliveries`), no hay nada inventado.
+- Agregué el tag **Products** aunque la consigna no lo pide, porque es un recurso real de la API y no documentarlo sería una mentira por omisión.
+
+Los schemas reutilizables (`components.schemas` del spec) son `User`, `UserPreview` (la versión sin guardar que devuelven los mocks, no tiene `_id`), `Product`, `OrderItem`, `Order`, `Delivery`, `SeedResult`, `SuccessResponse` y `ErrorResponse`. El `ErrorResponse` tiene el `code` como enum con los mismos 8 valores de `src/errors/error-codes.js` — si se agrega un error nuevo al proyecto y no se actualiza el spec, se nota a simple vista.
+
+No hay nada de autenticación documentada porque la API todavía no tiene login ni tokens — el día que se agregue, ahí se suma.
