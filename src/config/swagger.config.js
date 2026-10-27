@@ -4,13 +4,6 @@ import { config } from './env.config.js';
 // src/routes/ para no mezclar la doc con la logica de las rutas. Las rutas no
 // saben que esto existe; esto no sabe nada de express.
 
-const errorResponseExample = (code, message, details) => ({
-  status: 'error',
-  code,
-  message,
-  ...(details ? { details } : {}),
-});
-
 const schemas = {
   User: {
     type: 'object',
@@ -68,10 +61,11 @@ const schemas = {
   Order: {
     type: 'object',
     description:
-      'Pedido tal cual lo devuelve el generador de mocks (GET /mocks/pedidos). No hay un endpoint que devuelva un pedido ya ' +
-      'guardado en Mongo; ahi "customer" queda como un id de referencia en vez del objeto de usuario embebido que se ve aca.',
+      '"customer" aparece poblado con el User real cuando el pedido viene de POST/GET /orders (ya guardado en Mongo). ' +
+      'Cuando viene de GET /mocks/pedidos (sin guardar) trae un UserPreview embebido en su lugar.',
     properties: {
-      customer: { $ref: '#/components/schemas/UserPreview' },
+      _id: { type: 'string', example: '665f2a3b9c1d4e5f6a7b8c9d' },
+      customer: { oneOf: [{ $ref: '#/components/schemas/User' }, { $ref: '#/components/schemas/UserPreview' }] },
       items: { type: 'array', items: { $ref: '#/components/schemas/OrderItem' } },
       totalAmount: { type: 'number', example: 184.72 },
       destinationCity: { type: 'string', example: 'Arequipa' },
@@ -81,12 +75,14 @@ const schemas = {
         example: 'confirmed',
       },
       priority: { type: 'string', enum: ['low', 'medium', 'high'], example: 'high' },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
     },
   },
 
   Delivery: {
     type: 'object',
-    description: 'Entrega tal cual la devuelve GET /mocks/entregas, con su pedido embebido (mismo motivo que Order).',
+    description: 'Entrega tal cual la devuelve GET /mocks/entregas, con su pedido embebido. No hay un CRUD real de entregas todavia.',
     properties: {
       order: { $ref: '#/components/schemas/Order' },
       deliveryPerson: {
@@ -143,44 +139,25 @@ const schemas = {
   },
 };
 
-const responses = {
-  BadRequest: {
-    description: 'Dato invalido (falta un campo, formato incorrecto, qty/coleccion/status invalidos, body con JSON mal formado)',
-    content: {
-      'application/json': {
-        schema: { $ref: '#/components/schemas/ErrorResponse' },
-        example: errorResponseExample('VALIDATION_ERROR', 'Faltan datos obligatorios del producto'),
-      },
-    },
-  },
-  NotFound: {
-    description: 'El recurso pedido no existe',
-    content: {
-      'application/json': {
-        schema: { $ref: '#/components/schemas/ErrorResponse' },
-        example: errorResponseExample('NOT_FOUND', 'No encontramos ese producto en el catalogo de ShipNow Peru'),
-      },
-    },
-  },
-  Conflict: {
-    description: 'Conflicto con el estado actual del recurso (duplicado, ya discontinuado, etc.)',
-    content: {
-      'application/json': {
-        schema: { $ref: '#/components/schemas/ErrorResponse' },
-        example: errorResponseExample('CONFLICT', 'Ya existe un usuario registrado con ese correo'),
-      },
-    },
-  },
-  ServerError: {
-    description: 'Fallo inesperado del servidor o de la carga en MongoDB',
-    content: {
-      'application/json': {
-        schema: { $ref: '#/components/schemas/ErrorResponse' },
-        example: errorResponseExample('INTERNAL_ERROR', 'Ocurrio un error inesperado en el servidor'),
-      },
-    },
-  },
-};
+// Cada error de acá abajo se arma dentro de cada endpoint (no como un objeto
+// compartido), porque reusar un solo ejemplo para todos los 400 de la API
+// terminaba mostrando codigos que ese endpoint puntual nunca devuelve.
+const errorExample = (code, message, details) => ({ status: 'error', code, message, ...(details ? { details } : {}) });
+
+const errorContent = (example) => ({ 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' }, example } });
+
+const errorContentMulti = (examples) => ({
+  'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' }, examples },
+});
+
+const badRequest = (description, example) => ({ description, content: errorContent(example) });
+const badRequestMulti = (description, examples) => ({ description, content: errorContentMulti(examples) });
+const notFound = (description, example) => ({ description, content: errorContent(example) });
+const conflict = (description, example) => ({ description, content: errorContent(example) });
+const serverError = (description, example) => ({ description, content: errorContent(example) });
+
+const badId = (resource) =>
+  errorExample('VALIDATION_ERROR', `El valor "no-es-un-id" no tiene un formato valido para "_id"`);
 
 const paginatedPayload = (itemsRef) => ({
   type: 'object',
@@ -193,8 +170,8 @@ const paginatedPayload = (itemsRef) => ({
   },
 });
 
-const successEnvelope = (payloadSchema, example) => ({
-  description: 'OK',
+const successEnvelope = (payloadSchema, example, description = 'OK') => ({
+  description,
   content: {
     'application/json': {
       schema: {
@@ -232,15 +209,34 @@ export const swaggerSpec = {
   },
   servers: [{ url: `http://localhost:${config.port}/api`, description: 'Servidor local' }],
   tags: [
+    { name: 'Health', description: 'Chequeo de que el servidor esta vivo' },
     { name: 'Products', description: 'Catalogo de productos' },
     { name: 'Users', description: 'Usuarios de la plataforma (clientes y repartidores)' },
-    { name: 'Orders', description: 'Pedidos. Hoy solo existen via el modulo de mocks, no hay un CRUD real todavia' },
-    { name: 'Deliveries', description: 'Entregas. Igual que Orders, por ahora solo via mocks' },
+    { name: 'Orders', description: 'Pedidos: CRUD basico (crear, listar, ver por id, cambiar estado)' },
+    { name: 'Deliveries', description: 'Entregas. Todavia no tienen CRUD propio, solo existen via el modulo de mocks' },
     { name: 'Mocks', description: 'Generacion y carga de datos de prueba (usuarios, repartidores, pedidos, entregas)' },
     { name: 'Logger', description: 'Endpoint de diagnostico del sistema de logs, no es logica de negocio' },
   ],
-  components: { schemas, responses },
+  components: { schemas },
   paths: {
+    '/health': {
+      get: {
+        tags: ['Health'],
+        summary: 'Ver si el servidor esta activo',
+        responses: {
+          200: {
+            description: 'OK',
+            content: {
+              'application/json': {
+                schema: { type: 'object', properties: { status: { type: 'string' }, message: { type: 'string' } } },
+                example: { status: 'success', message: 'ShipNow Peru esta en linea' },
+              },
+            },
+          },
+        },
+      },
+    },
+
     '/products': {
       get: {
         tags: ['Products'],
@@ -254,7 +250,16 @@ export const swaggerSpec = {
         ],
         responses: {
           200: successEnvelope(paginatedPayload('#/components/schemas/Product')),
-          400: responses.BadRequest,
+          400: badRequestMulti('page/limit invalidos, o status fuera del enum', {
+            estadoInvalido: {
+              summary: 'status fuera del enum',
+              value: errorExample('INVALID_STATUS', 'El estado "no_existe" no es valido. Usa uno de: available, out_of_stock, discontinued.'),
+            },
+            paginacionInvalida: {
+              summary: 'limit no numerico',
+              value: errorExample('VALIDATION_ERROR', 'El parametro "limit" tiene que ser un numero entero mayor a cero, recibimos "abc"'),
+            },
+          }),
         },
       },
       post: {
@@ -289,8 +294,8 @@ export const swaggerSpec = {
         },
         responses: {
           201: successEnvelope({ $ref: '#/components/schemas/Product' }),
-          400: responses.BadRequest,
-          409: responses.Conflict,
+          400: badRequest('falta un campo obligatorio, o price/stock negativo', errorExample('VALIDATION_ERROR', 'Faltan datos obligatorios del producto')),
+          409: conflict('ya existe un producto con ese nombre', errorExample('CONFLICT', 'Ya existe un producto registrado con ese nombre')),
         },
       },
     },
@@ -302,8 +307,8 @@ export const swaggerSpec = {
         parameters: [idParam],
         responses: {
           200: successEnvelope({ $ref: '#/components/schemas/Product' }),
-          400: responses.BadRequest,
-          404: responses.NotFound,
+          400: badRequest('id con formato invalido', badId()),
+          404: notFound('no existe un producto con ese id', errorExample('NOT_FOUND', 'No encontramos ese producto en el catalogo de ShipNow Peru')),
         },
       },
       put: {
@@ -329,9 +334,12 @@ export const swaggerSpec = {
         },
         responses: {
           200: successEnvelope({ $ref: '#/components/schemas/Product' }),
-          400: responses.BadRequest,
-          404: responses.NotFound,
-          409: responses.Conflict,
+          400: badRequestMulti('id invalido o price/stock negativo', {
+            idInvalido: { summary: 'id con formato invalido', value: badId() },
+            precioInvalido: { summary: 'price negativo', value: errorExample('VALIDATION_ERROR', 'El precio tiene que ser un numero mayor o igual a cero') },
+          }),
+          404: notFound('no existe un producto con ese id', errorExample('NOT_FOUND', 'No encontramos ese producto en el catalogo de ShipNow Peru')),
+          409: conflict('el producto ya esta discontinuado', errorExample('CONFLICT', 'Un producto discontinuado ya no se puede modificar')),
         },
       },
       delete: {
@@ -340,8 +348,9 @@ export const swaggerSpec = {
         parameters: [idParam],
         responses: {
           200: successEnvelope({ $ref: '#/components/schemas/Product' }),
-          404: responses.NotFound,
-          409: responses.Conflict,
+          400: badRequest('id con formato invalido', badId()),
+          404: notFound('no existe un producto con ese id', errorExample('NOT_FOUND', 'No encontramos ese producto en el catalogo de ShipNow Peru')),
+          409: conflict('ya estaba discontinuado', errorExample('CONFLICT', 'Este producto ya esta discontinuado')),
         },
       },
     },
@@ -357,7 +366,7 @@ export const swaggerSpec = {
         ],
         responses: {
           200: successEnvelope(paginatedPayload('#/components/schemas/User')),
-          400: responses.BadRequest,
+          400: badRequest('page/limit invalidos', errorExample('VALIDATION_ERROR', 'El parametro "page" tiene que ser un numero entero mayor a cero, recibimos "-1"')),
         },
       },
       post: {
@@ -383,8 +392,11 @@ export const swaggerSpec = {
         },
         responses: {
           201: successEnvelope({ $ref: '#/components/schemas/User' }),
-          400: responses.BadRequest,
-          409: responses.Conflict,
+          400: badRequestMulti('falta un campo, o el email no tiene formato valido', {
+            faltanDatos: { summary: 'falta un campo', value: errorExample('VALIDATION_ERROR', 'Faltan datos obligatorios del usuario') },
+            emailInvalido: { summary: 'email mal formado', value: errorExample('VALIDATION_ERROR', 'El correo no tiene un formato valido') },
+          }),
+          409: conflict('ya existe un usuario con ese correo', errorExample('CONFLICT', 'Ya existe un usuario registrado con ese correo')),
         },
       },
     },
@@ -396,8 +408,8 @@ export const swaggerSpec = {
         parameters: [idParam],
         responses: {
           200: successEnvelope({ $ref: '#/components/schemas/User' }),
-          400: responses.BadRequest,
-          404: responses.NotFound,
+          400: badRequest('id con formato invalido', badId()),
+          404: notFound('no existe un usuario con ese id', errorExample('NOT_FOUND', 'No encontramos ese usuario en ShipNow Peru')),
         },
       },
       put: {
@@ -421,9 +433,12 @@ export const swaggerSpec = {
         },
         responses: {
           200: successEnvelope({ $ref: '#/components/schemas/User' }),
-          400: responses.BadRequest,
-          404: responses.NotFound,
-          409: responses.Conflict,
+          400: badRequestMulti('id invalido o email mal formado', {
+            idInvalido: { summary: 'id con formato invalido', value: badId() },
+            emailInvalido: { summary: 'email mal formado', value: errorExample('VALIDATION_ERROR', 'El correo no tiene un formato valido') },
+          }),
+          404: notFound('no existe un usuario con ese id', errorExample('NOT_FOUND', 'No encontramos ese usuario en ShipNow Peru')),
+          409: conflict('ya existe otro usuario con ese correo', errorExample('CONFLICT', 'Ya existe un usuario registrado con ese correo')),
         },
       },
       delete: {
@@ -432,7 +447,105 @@ export const swaggerSpec = {
         parameters: [idParam],
         responses: {
           200: successEnvelope({ $ref: '#/components/schemas/User' }),
-          404: responses.NotFound,
+          400: badRequest('id con formato invalido', badId()),
+          404: notFound('no existe un usuario con ese id', errorExample('NOT_FOUND', 'No encontramos ese usuario en ShipNow Peru')),
+        },
+      },
+    },
+
+    '/orders': {
+      get: {
+        tags: ['Orders'],
+        summary: 'Listar pedidos',
+        parameters: [
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['pending', 'confirmed', 'in_transit', 'delivered', 'cancelled'] } },
+          { name: 'city', in: 'query', schema: { type: 'string' }, description: 'filtra por destinationCity' },
+        ],
+        responses: {
+          200: successEnvelope(paginatedPayload('#/components/schemas/Order')),
+          400: badRequestMulti('page/limit invalidos, o status fuera del enum', {
+            estadoInvalido: {
+              summary: 'status fuera del enum',
+              value: errorExample('INVALID_STATUS', 'El estado "volando" no es valido. Usa uno de: pending, confirmed, in_transit, delivered, cancelled.'),
+            },
+            paginacionInvalida: {
+              summary: 'page no numerico',
+              value: errorExample('VALIDATION_ERROR', 'El parametro "page" tiene que ser un numero entero mayor a cero, recibimos "abc"'),
+            },
+          }),
+        },
+      },
+      post: {
+        tags: ['Orders'],
+        summary: 'Crear un pedido (el cliente tiene que existir)',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['customer', 'items', 'destinationCity'],
+                properties: {
+                  customer: { type: 'string', description: 'id de un usuario ya registrado' },
+                  items: { type: 'array', items: { $ref: '#/components/schemas/OrderItem' }, minItems: 1 },
+                  destinationCity: { type: 'string' },
+                  priority: { type: 'string', enum: ['low', 'medium', 'high'], description: 'default medium' },
+                },
+              },
+              example: {
+                customer: '665f28f19c1d4e5f6a7b8c91',
+                items: [{ name: 'Chompa de alpaca', quantity: 2, unitPrice: 89.9 }],
+                destinationCity: 'Lima',
+                priority: 'high',
+              },
+            },
+          },
+        },
+        responses: {
+          201: successEnvelope({ $ref: '#/components/schemas/Order' }),
+          400: badRequestMulti('faltan datos, no hay items, o la prioridad no es valida', {
+            sinItems: { summary: 'sin items', value: errorExample('VALIDATION_ERROR', 'El pedido necesita al menos un item valido (name, quantity > 0, unitPrice >= 0)') },
+            faltanDatos: { summary: 'falta customer/destinationCity', value: errorExample('VALIDATION_ERROR', 'Faltan datos obligatorios del pedido (customer, destinationCity)') },
+          }),
+          404: notFound('el customer indicado no existe', errorExample('NOT_FOUND', 'El cliente indicado no existe (o esta desactivado)')),
+        },
+      },
+    },
+
+    '/orders/{id}': {
+      get: {
+        tags: ['Orders'],
+        summary: 'Ver un pedido por id',
+        parameters: [idParam],
+        responses: {
+          200: successEnvelope({ $ref: '#/components/schemas/Order' }),
+          400: badRequest('id con formato invalido', badId()),
+          404: notFound('no existe un pedido con ese id', errorExample('NOT_FOUND', 'No encontramos ese pedido en ShipNow Peru')),
+        },
+      },
+    },
+
+    '/orders/{id}/status': {
+      patch: {
+        tags: ['Orders'],
+        summary: 'Cambiar el estado de un pedido',
+        parameters: [idParam],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', required: ['status'], properties: { status: { type: 'string', enum: ['pending', 'confirmed', 'in_transit', 'delivered', 'cancelled'] } } },
+              example: { status: 'confirmed' },
+            },
+          },
+        },
+        responses: {
+          200: successEnvelope({ $ref: '#/components/schemas/Order' }),
+          400: badRequest('status fuera del enum', errorExample('INVALID_STATUS', 'El estado "volando" no es valido. Usa uno de: pending, confirmed, in_transit, delivered, cancelled.')),
+          404: notFound('no existe un pedido con ese id', errorExample('NOT_FOUND', 'No encontramos ese pedido en ShipNow Peru')),
+          409: conflict('el pedido ya esta cancelado', errorExample('CONFLICT', 'Un pedido cancelado no admite mas cambios de estado')),
         },
       },
     },
@@ -444,7 +557,7 @@ export const swaggerSpec = {
         parameters: [qtyParam],
         responses: {
           200: successEnvelope({ type: 'array', items: { $ref: '#/components/schemas/UserPreview' } }),
-          400: responses.BadRequest,
+          400: badRequest('qty invalido', errorExample('INVALID_MOCK_QUANTITY', 'La cantidad "-5" no es valida: qty tiene que ser un numero entero mayor a cero')),
         },
       },
     },
@@ -456,7 +569,7 @@ export const swaggerSpec = {
         parameters: [qtyParam],
         responses: {
           200: successEnvelope({ type: 'array', items: { $ref: '#/components/schemas/UserPreview' } }),
-          400: responses.BadRequest,
+          400: badRequest('qty invalido', errorExample('INVALID_MOCK_QUANTITY', 'La cantidad "abc" no es valida: qty tiene que ser un numero entero mayor a cero')),
         },
       },
     },
@@ -468,7 +581,7 @@ export const swaggerSpec = {
         parameters: [qtyParam],
         responses: {
           200: successEnvelope({ type: 'array', items: { $ref: '#/components/schemas/Order' } }),
-          400: responses.BadRequest,
+          400: badRequest('qty invalido', errorExample('INVALID_MOCK_QUANTITY', 'La cantidad "0" no es valida: qty tiene que ser un numero entero mayor a cero')),
         },
       },
     },
@@ -480,7 +593,7 @@ export const swaggerSpec = {
         parameters: [qtyParam],
         responses: {
           200: successEnvelope({ type: 'array', items: { $ref: '#/components/schemas/Delivery' } }),
-          400: responses.BadRequest,
+          400: badRequest('qty invalido', errorExample('INVALID_MOCK_QUANTITY', 'La cantidad "-1" no es valida: qty tiene que ser un numero entero mayor a cero')),
         },
       },
     },
@@ -503,23 +616,24 @@ export const swaggerSpec = {
         ],
         responses: {
           201: successEnvelope({ $ref: '#/components/schemas/SeedResult' }),
-          400: {
-            description: 'qty invalido, coleccion invalida, o ambos a la vez (en ese caso los dos se informan juntos en "details")',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ErrorResponse' },
-                example: errorResponseExample(
-                  'VALIDATION_ERROR',
-                  'Hay mas de un dato invalido en la peticion de seed',
-                  [
-                    'La coleccion "invalida" no es valida. Usa una de: usuarios, repartidores, pedidos, entregas.',
-                    'La cantidad "-5" no es valida: qty tiene que ser un numero entero mayor a cero',
-                  ]
-                ),
-              },
+          400: badRequestMulti('qty invalido, coleccion invalida, o ambos a la vez', {
+            cantidadInvalida: {
+              summary: 'solo qty esta mal',
+              value: errorExample('INVALID_MOCK_QUANTITY', 'La cantidad "-5" no es valida: qty tiene que ser un numero entero mayor a cero'),
             },
-          },
-          500: responses.ServerError,
+            coleccionInvalida: {
+              summary: 'solo coleccion esta mal',
+              value: errorExample('INVALID_MOCK_COLLECTION', 'La coleccion "invalida" no es valida. Usa una de: usuarios, repartidores, pedidos, entregas.'),
+            },
+            ambosInvalidos: {
+              summary: 'los dos a la vez: se informan juntos en "details"',
+              value: errorExample('VALIDATION_ERROR', 'Hay mas de un dato invalido en la peticion de seed', [
+                'La coleccion "invalida" no es valida. Usa una de: usuarios, repartidores, pedidos, entregas.',
+                'La cantidad "-5" no es valida: qty tiene que ser un numero entero mayor a cero',
+              ]),
+            },
+          }),
+          500: serverError('fallo la escritura en MongoDB', errorExample('MOCK_SEED_FAILED', 'No se pudo cargar la coleccion "usuarios" en MongoDB: connection timed out')),
         },
       },
     },
