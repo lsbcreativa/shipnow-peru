@@ -1,8 +1,10 @@
 import { orderRepository } from '../repositories/order.repository.js';
 import { userRepository } from '../repositories/user.repository.js';
 import { ORDER_STATUS, ORDER_PRIORITY } from '../constants/index.js';
-import { NotFoundError, ValidationError, ConflictError, InvalidStatusError } from '../errors/index.js';
+import { NotFoundError, ValidationError, ConflictError, InvalidStatusError, FileRequiredError } from '../errors/index.js';
 import { parsePagination } from '../utils/pagination.js';
+import { logger } from '../config/logger.config.js';
+import { relativeUploadPath } from '../config/upload.config.js';
 
 const sumItems = (items) => Number(items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0).toFixed(2));
 
@@ -84,6 +86,25 @@ class OrderService {
     }
 
     return orderRepository.updateStatusById(id, status);
+  }
+
+  async addReceipt(orderId, file) {
+    if (!file) {
+      throw new FileRequiredError('receipt');
+    }
+
+    await this.getById(orderId);
+
+    const order = await orderRepository.addReceipt(orderId, {
+      originalName: file.originalname,
+      storedName: file.filename,
+      path: relativeUploadPath(file.path),
+      mimeType: file.mimetype,
+      size: file.size,
+    });
+
+    logger.info(`comprobante cargado para el pedido ${orderId}`);
+    return order;
   }
 }
 

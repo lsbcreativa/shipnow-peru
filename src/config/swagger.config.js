@@ -16,6 +16,7 @@ const schemas = {
       city: { type: 'string', example: 'Cusco' },
       role: { type: 'string', enum: ['admin', 'cliente', 'repartidor'], example: 'cliente' },
       isActive: { type: 'boolean', example: true },
+      documents: { type: 'array', items: { $ref: '#/components/schemas/UserDocument' } },
       createdAt: { type: 'string', format: 'date-time' },
       updatedAt: { type: 'string', format: 'date-time' },
     },
@@ -75,6 +76,7 @@ const schemas = {
         example: 'confirmed',
       },
       priority: { type: 'string', enum: ['low', 'medium', 'high'], example: 'high' },
+      receipts: { type: 'array', items: { $ref: '#/components/schemas/Receipt' } },
       createdAt: { type: 'string', format: 'date-time' },
       updatedAt: { type: 'string', format: 'date-time' },
     },
@@ -96,6 +98,33 @@ const schemas = {
         enum: ['pending', 'assigned', 'in_transit', 'delivered', 'failed'],
         example: 'assigned',
       },
+    },
+  },
+
+  UserDocument: {
+    type: 'object',
+    description: 'Metadata del archivo. El archivo en si se guarda en disco, acá solo quedan los datos.',
+    properties: {
+      originalName: { type: 'string', example: 'dni-maria.pdf' },
+      storedName: { type: 'string', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf' },
+      path: { type: 'string', example: 'uploads/users/665f28f19c1d4e5f6a7b8c91/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf' },
+      mimeType: { type: 'string', example: 'application/pdf' },
+      size: { type: 'number', example: 204800 },
+      documentType: { type: 'string', enum: ['dni', 'licencia_de_conducir', 'comprobante_domicilio'], example: 'dni' },
+      uploadedAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  Receipt: {
+    type: 'object',
+    description: 'Metadata de un comprobante de pedido. El archivo en si se guarda en disco, acá solo quedan los datos.',
+    properties: {
+      originalName: { type: 'string', example: 'comprobante.jpg' },
+      storedName: { type: 'string', example: 'b2c3d4e5-f678-9012-bcde-f23456789012.jpg' },
+      path: { type: 'string', example: 'uploads/orders/665f2a3b9c1d4e5f6a7b8c9d/b2c3d4e5-f678-9012-bcde-f23456789012.jpg' },
+      mimeType: { type: 'string', example: 'image/jpeg' },
+      size: { type: 'number', example: 102400 },
+      uploadedAt: { type: 'string', format: 'date-time' },
     },
   },
 
@@ -130,6 +159,11 @@ const schemas = {
           'INVALID_MOCK_QUANTITY',
           'INVALID_MOCK_COLLECTION',
           'MOCK_SEED_FAILED',
+          'FILE_REQUIRED',
+          'INVALID_FILE_TYPE',
+          'FILE_TOO_LARGE',
+          'INVALID_DOCUMENT_TYPE',
+          'FILE_STORAGE_FAILED',
           'INTERNAL_ERROR',
         ],
       },
@@ -453,6 +487,40 @@ export const swaggerSpec = {
       },
     },
 
+    '/users/{id}/documents': {
+      post: {
+        tags: ['Users'],
+        summary: 'Subir un documento del usuario (DNI, licencia, comprobante de domicilio)',
+        description: 'multipart/form-data: el campo del archivo se llama "document" y es obligatorio, junto con "documentType".',
+        parameters: [idParam],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['document', 'documentType'],
+                properties: {
+                  document: { type: 'string', format: 'binary', description: 'jpg, png o pdf, hasta 5MB' },
+                  documentType: { type: 'string', enum: ['dni', 'licencia_de_conducir', 'comprobante_domicilio'] },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: successEnvelope({ $ref: '#/components/schemas/User' }, undefined, 'documento cargado, devuelve el usuario con su array de documents actualizado'),
+          400: badRequestMulti('falta el archivo, el tipo de documento no es valido, el archivo no es jpg/png/pdf, o supera los 5MB', {
+            archivoFaltante: { summary: 'no se mando ningun archivo', value: errorExample('FILE_REQUIRED', 'Falta subir un archivo en el campo "document"') },
+            tipoDocumentoInvalido: { summary: 'documentType fuera del enum', value: errorExample('INVALID_DOCUMENT_TYPE', 'El tipo de documento "pasaporte" no es valido. Usa uno de: dni, licencia_de_conducir, comprobante_domicilio.') },
+            tipoArchivoInvalido: { summary: 'mimetype no permitido', value: errorExample('INVALID_FILE_TYPE', 'El tipo de archivo "application/zip" no esta permitido. Usa uno de: image/jpeg, image/png, application/pdf.') },
+            archivoMuyGrande: { summary: 'supera los 5MB', value: errorExample('FILE_TOO_LARGE', 'El archivo supera el tamaño maximo permitido (5MB)') },
+          }),
+          404: notFound('no existe un usuario con ese id', errorExample('NOT_FOUND', 'No encontramos ese usuario en ShipNow Peru')),
+        },
+      },
+    },
+
     '/orders': {
       get: {
         tags: ['Orders'],
@@ -546,6 +614,36 @@ export const swaggerSpec = {
           400: badRequest('status fuera del enum', errorExample('INVALID_STATUS', 'El estado "volando" no es valido. Usa uno de: pending, confirmed, in_transit, delivered, cancelled.')),
           404: notFound('no existe un pedido con ese id', errorExample('NOT_FOUND', 'No encontramos ese pedido en ShipNow Peru')),
           409: conflict('el pedido ya esta cancelado', errorExample('CONFLICT', 'Un pedido cancelado no admite mas cambios de estado')),
+        },
+      },
+    },
+
+    '/orders/{id}/receipt': {
+      post: {
+        tags: ['Orders'],
+        summary: 'Subir el comprobante de un pedido (foto o PDF)',
+        description: 'multipart/form-data: el campo del archivo se llama "receipt" y es obligatorio. No pide un tipo de documento.',
+        parameters: [idParam],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['receipt'],
+                properties: { receipt: { type: 'string', format: 'binary', description: 'jpg, png o pdf, hasta 5MB' } },
+              },
+            },
+          },
+        },
+        responses: {
+          201: successEnvelope({ $ref: '#/components/schemas/Order' }, undefined, 'comprobante cargado, devuelve el pedido con su array de receipts actualizado'),
+          400: badRequestMulti('falta el archivo, no es jpg/png/pdf, o supera los 5MB', {
+            archivoFaltante: { summary: 'no se mando ningun archivo', value: errorExample('FILE_REQUIRED', 'Falta subir un archivo en el campo "receipt"') },
+            tipoArchivoInvalido: { summary: 'mimetype no permitido', value: errorExample('INVALID_FILE_TYPE', 'El tipo de archivo "application/zip" no esta permitido. Usa uno de: image/jpeg, image/png, application/pdf.') },
+            archivoMuyGrande: { summary: 'supera los 5MB', value: errorExample('FILE_TOO_LARGE', 'El archivo supera el tamaño maximo permitido (5MB)') },
+          }),
+          404: notFound('no existe un pedido con ese id', errorExample('NOT_FOUND', 'No encontramos ese pedido en ShipNow Peru')),
         },
       },
     },

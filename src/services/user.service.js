@@ -1,7 +1,9 @@
 import { userRepository } from '../repositories/user.repository.js';
-import { ROLES } from '../constants/index.js';
-import { NotFoundError, ValidationError, ConflictError } from '../errors/index.js';
+import { ROLES, USER_DOCUMENT_TYPES } from '../constants/index.js';
+import { NotFoundError, ValidationError, ConflictError, FileRequiredError, InvalidDocumentTypeError } from '../errors/index.js';
 import { parsePagination } from '../utils/pagination.js';
+import { logger } from '../config/logger.config.js';
+import { relativeUploadPath } from '../config/upload.config.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -85,6 +87,29 @@ class UserService {
   async remove(id) {
     await this.getById(id);
     return userRepository.deactivateById(id);
+  }
+
+  async addDocument(userId, file, documentType) {
+    if (!file) {
+      throw new FileRequiredError('document');
+    }
+    if (!documentType || !Object.values(USER_DOCUMENT_TYPES).includes(documentType)) {
+      throw new InvalidDocumentTypeError(documentType, Object.values(USER_DOCUMENT_TYPES));
+    }
+
+    await this.getById(userId);
+
+    const user = await userRepository.addDocument(userId, {
+      originalName: file.originalname,
+      storedName: file.filename,
+      path: relativeUploadPath(file.path),
+      mimeType: file.mimetype,
+      size: file.size,
+      documentType,
+    });
+
+    logger.info(`documento "${documentType}" cargado para el usuario ${userId}`);
+    return user;
   }
 }
 

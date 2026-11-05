@@ -41,6 +41,12 @@ class UserRepository {
   async deactivateById(id) {
     return UserModel.findByIdAndUpdate(id, { isActive: false }, { new: true }).select(DEFAULT_PROJECTION);
   }
+
+  async addDocument(id, document) {
+    return UserModel.findByIdAndUpdate(id, { $push: { documents: document } }, { new: true, runValidators: true }).select(
+      DEFAULT_PROJECTION
+    );
+  }
 }
 
 export const userRepository = new UserRepository();

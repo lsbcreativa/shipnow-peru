@@ -21,6 +21,7 @@ API REST para **ShipNow Perú**, una plataforma de venta y despacho de productos
 - [Logging](#logging)
 - [Documentación con Swagger](#documentación-con-swagger)
 - [Testing](#testing)
+- [Carga de archivos](#carga-de-archivos)
 
 ## Temática
 
@@ -43,6 +44,7 @@ La plataforma maneja estas entidades:
 | Pre-entrega 4 | Logging con Winston (consola + archivo con rotación), conectado al middleware de errores y al módulo de mocking | Completada |
 | Pre-entrega 5 | Documentación interactiva con Swagger (`/api/docs`): info general, tags, schemas reutilizables y errores reales documentados | Completada |
 | Pre-entrega 6 | CRUD real de Pedidos (`/api/orders`), y una suite de tests funcionales con Mocha, Chai y Supertest contra una MongoDB de prueba en memoria | Completada |
+| Pre-entrega 7 | Carga de archivos con Multer: documentos de usuario y comprobantes de pedido, guardados en disco con sus metadatos en Mongo | Completada |
 
 Las siguientes fases (autenticación, permisos por rol, asignación real de repartidores, etc.) se van a ir sumando en las próximas entregas del curso.
 
@@ -60,6 +62,7 @@ Las siguientes fases (autenticación, permisos por rol, asignación real de repa
 | Mocha + Chai + Supertest | Suite de tests funcionales |
 | mongodb-memory-server | MongoDB efímera para correr los tests sin depender de una base externa |
 | swagger-ui-express | Documentación interactiva de la API en `/api/docs` |
+| Multer | Carga de archivos (documentos de usuario, comprobantes de pedido) |
 
 ## Instalación
 
@@ -127,7 +130,8 @@ shipnow-peru/
 │   │   ├── index.js                        # punto de entrada unico a la configuracion
 │   │   ├── db.config.js                    # conexion a MongoDB
 │   │   ├── logger.config.js                # instancia de Winston (ver Logging)
-│   │   └── swagger.config.js               # spec de OpenAPI a mano, nada de esto lo saben las rutas
+│   │   ├── swagger.config.js               # spec de OpenAPI a mano, nada de esto lo saben las rutas
+│   │   └── upload.config.js                # Multer: carpetas, nombres de archivo, tipos y tamaño permitidos (ver Carga de archivos)
 │   ├── constants/
 │   │   └── index.js                        # ROLES, PRODUCT_STATUS, ORDER_STATUS, ORDER_PRIORITY, DELIVERY_STATUS
 │   ├── models/
@@ -172,13 +176,16 @@ shipnow-peru/
 │       └── pagination.js                   # valida page/limit, los usan products y users
 ├── tests/                                   # suite de Mocha/Chai/Supertest (ver Testing)
 │   ├── setup.js                             # levanta la Mongo de prueba, conecta, limpia entre tests
+│   ├── helpers.js                           # expectError (status+code+message) y factories createUser/createOrder
 │   ├── health.test.js
 │   ├── products.test.js
 │   ├── users.test.js
 │   ├── orders.test.js
 │   ├── mocks.test.js
+│   ├── uploads.test.js
 │   ├── logger.test.js
 │   └── docs.test.js
+├── uploads/                                 # se crea sola al subir el primer archivo, no va al repo (ver Carga de archivos)
 ├── logs/                                   # se crea solo al arrancar, no va al repo (ver Logging)
 ├── .mocharc.json
 ├── .env.example
@@ -284,6 +291,8 @@ Todas las rutas cuelgan del prefijo `/api`.
 | GET | `/api/orders/:id` | Detalle de un pedido (con el cliente poblado) |
 | POST | `/api/orders` | Crea un pedido para un `customer` que ya tiene que existir |
 | PATCH | `/api/orders/:id/status` | Cambia el estado del pedido (un pedido `cancelled` no admite más cambios) |
+| POST | `/api/users/:id/documents` | Sube un documento del usuario (`document`, multipart) con su `documentType` |
+| POST | `/api/orders/:id/receipt` | Sube el comprobante de un pedido (`receipt`, multipart) |
 | GET | `/api/mocks/users?qty=N` | Genera `N` usuarios simulados (`cliente`/`repartidor`), sin guardarlos |
 | GET | `/api/mocks/repartidores?qty=N` | Genera `N` usuarios simulados, todos con rol `repartidor`, sin guardarlos |
 | GET | `/api/mocks/pedidos?qty=N` | Genera `N` pedidos simulados con su cliente embebido, sin guardarlos |
@@ -291,6 +300,7 @@ Todas las rutas cuelgan del prefijo `/api`.
 | POST | `/api/mocks/seed?qty=N&coleccion=X` | Inserta `N` registros de prueba reales en MongoDB (`usuarios`, `repartidores`, `pedidos` o `entregas`) |
 | GET | `/api/logs/test` | Dispara un log de cada nivel (debug/http/info/warning/error/fatal), para chequear que el logger anda bien |
 | GET | `/api/docs` | Swagger UI, documentación interactiva de toda esta tabla |
+| GET | `/api/docs/openapi.json` | El spec de OpenAPI en crudo, sin el HTML de Swagger UI alrededor |
 
 ## Ejemplos de uso
 
@@ -641,9 +651,10 @@ Tags usados: **Health**, **Products**, **Users**, **Orders**, **Deliveries**, **
 
 - **Orders** ya tiene su propio CRUD (`/orders`), no es solo mocks. **Deliveries** sigue siendo solo mocks por ahora (no hay CRUD de entregas todavía), así que `/mocks/entregas` va con los dos tags (`Mocks` + `Deliveries`) y `/mocks/pedidos` con `Mocks` + `Orders`.
 - Agregué el tag **Products** aunque la consigna no lo pide, porque es un recurso real de la API y no documentarlo sería una mentira por omisión. Mismo criterio con **Health**.
-- Cada respuesta de error tiene su ejemplo armado adentro de ese endpoint puntual (no un ejemplo compartido entre todos los 400 de la API, que fue justo lo que se corrigió en esta entrega): el 400 de `/mocks/users` muestra `INVALID_MOCK_QUANTITY`, el 400 de crear un producto muestra `VALIDATION_ERROR` con el mensaje real de "faltan datos", etc. Cuando un mismo status puede salir por más de un motivo real (por ejemplo `/products` con `page`/`limit` mal o con `status` fuera del enum), uso los `examples` nombrados de OpenAPI para mostrar los dos.
+- Cada respuesta de error tiene su ejemplo armado adentro de ese endpoint puntual (no un ejemplo compartido entre todos los 400 de la API): el 400 de `/mocks/users` muestra `INVALID_MOCK_QUANTITY`, el 400 de crear un producto muestra `VALIDATION_ERROR` con el mensaje real de "faltan datos", el 400 de subir un documento muestra `FILE_REQUIRED`/`INVALID_FILE_TYPE`/`INVALID_DOCUMENT_TYPE`/`FILE_TOO_LARGE` según corresponda. Cuando un mismo status puede salir por más de un motivo real uso los `examples` nombrados de OpenAPI para mostrar todos.
+- `/api/docs/openapi.json` devuelve el spec entero sin el HTML de Swagger UI alrededor — lo usan los tests de `docs.test.js` para chequear que lo documentado sea cierto, y también sirve si alguna vez hace falta importar el spec en Postman o en otra herramienta.
 
-Los schemas reutilizables (`components.schemas` del spec) son `User`, `UserPreview` (la versión sin guardar que devuelven los mocks, no tiene `_id`), `Product`, `OrderItem`, `Order`, `Delivery`, `SeedResult`, `SuccessResponse` y `ErrorResponse`. El `ErrorResponse` tiene el `code` como enum con los mismos 8 valores de `src/errors/error-codes.js` — si se agrega un error nuevo al proyecto y no se actualiza el spec, se nota a simple vista.
+Los schemas reutilizables (`components.schemas` del spec) son `User`, `UserPreview`, `UserDocument`, `Product`, `OrderItem`, `Order`, `Delivery`, `Receipt`, `SeedResult`, `SuccessResponse` y `ErrorResponse`. El `ErrorResponse` tiene el `code` como enum con los mismos valores de `src/errors/error-codes.js` — si se agrega un error nuevo al proyecto y no se actualiza el spec, se nota a simple vista.
 
 No hay nada de autenticación documentada porque la API todavía no tiene login ni tokens — el día que se agregue, ahí se suma.
 
@@ -654,6 +665,8 @@ npm test
 ```
 
 Corre toda la suite de una. Herramientas: **Mocha** organiza y ejecuta, **Chai** hace los `expect(...)`, y **Supertest** manda las peticiones HTTP directo contra la app de Express — sin levantar un puerto real, porque `src/app.js` (la app) está separado de `src/server.js` (el que hace `.listen`). `src/app.js` es justo lo que importan los tests.
+
+`tests/helpers.js` centraliza dos cosas que antes estaban repetidas entre archivos: `expectError(res, { status, code, messageIncludes })` (chequea siempre el `status` HTTP, el `code` y que el `message` venga, no solo el código) y las factories `createUser`/`createOrder` para armar datos de prueba sin repetir el mismo objeto a mano en cada test.
 
 ### La base de testing
 
@@ -674,12 +687,50 @@ Antes de **cada** test (no solo entre archivos) se limpian todas las colecciones
 | `products.test.js` | crear, listar con filtros, status inválido, duplicados, discontinuar |
 | `users.test.js` | crear, listar con paginación, `limit` inválido, buscar por id, desactivar |
 | `orders.test.js` | crear (con y sin cliente válido), consultar por id, listar, cambiar estado, estado inválido, pedido cancelado |
-| `mocks.test.js` | generar sin guardar (users/repartidores/pedidos), `qty` inválido, sembrar de verdad, colección inválida, los dos errores juntos |
-| `logger.test.js` | que `/api/logs/test` responda bien |
-| `docs.test.js` | que Swagger UI se sirva en `/api/docs` |
+| `mocks.test.js` | generar sin guardar los 4 recursos (users/repartidores/pedidos/**entregas**), `qty` inválido, sembrar de verdad, que sembrar entregas dos veces no duplique, colección inválida, los dos errores juntos |
+| `uploads.test.js` | subir documento de usuario (ok, sin archivo, documentType inválido, tipo de archivo inválido, usuario inexistente) y comprobante de pedido (ok, sin archivo, pedido inexistente) |
+| `logger.test.js` | que `/api/logs/test` dispare los 6 niveles, y que otro método en esa misma ruta dé 404 |
+| `docs.test.js` | que Swagger UI se sirva en `/api/docs`, que un método no soportado ahí dé 404, y que el `openapi.json` real declare los tags/schemas esperados y que cada ruta que documenta exista de verdad en la API |
 
-Cada test revisa el `status` HTTP y el cuerpo de la respuesta (el `code` del error, o las propiedades del `payload`), no solo que la petición "ande". Los casos de error documentados en Swagger (404 por recurso inexistente, 400 por dato inválido, etc.) tienen su test correspondiente acá — si algún día se desalinean, los tests son los que se rompen primero.
+Cada test revisa el `status` HTTP y el cuerpo de la respuesta — en los de error, siempre el `code` **y** el `message` (vía `expectError`), no solo que la petición "ande". Los casos de error documentados en Swagger (404 por recurso inexistente, 400 por dato inválido, etc.) tienen su test correspondiente acá — si algún día se desalinean, los tests son los que se rompen primero.
 
 ### Variables de entorno para testear
 
 Ninguna hace falta en un `.env` propio: `tests/setup.js` las define a mano (`NODE_ENV=test`, `PORT=8081` sin uso real, y el `MONGODB_URI` que le da `mongodb-memory-server`) antes de importar la app. Si alguna vez se agrega una variable obligatoria nueva en `src/config/env.config.js`, hay que sumarla ahí también o la suite no va a poder ni arrancar.
+
+## Carga de archivos
+
+Dos cosas se pueden subir: un **documento de usuario** (DNI, licencia de conducir, comprobante de domicilio) y un **comprobante de pedido** (la foto o el PDF que prueba que el paquete llegó). Todo pasa por [Multer](https://github.com/expressjs/multer), configurado en un solo lugar (`src/config/upload.config.js`) que no sabe nada de rutas ni de controllers — define dónde se guarda cada cosa, cómo se nombra el archivo en disco, qué tipos se aceptan y el tamaño máximo. Las rutas solo importan el middleware ya armado, igual que importan un controller.
+
+```
+uploads/
+├── users/<idDeUsuario>/<uuid>.<ext>
+└── orders/<idDePedido>/<uuid>.<ext>
+```
+
+El nombre en disco es un UUID (para no pisarse archivos ni depender del nombre que mandó el cliente); el nombre original, dónde quedó guardado, el tipo MIME, el peso y la fecha quedan como metadata en el documento de Mongo correspondiente — **el archivo nunca se mete en la base**, solo sus datos. La carpeta `uploads/` está en `.gitignore`: se crea sola la primera vez que alguien sube algo, no hace falta crearla a mano ni se sube al repo.
+
+Tipos permitidos: `image/jpeg`, `image/png`, `application/pdf`. Tamaño máximo: 5MB. Los dos se validan en `upload.config.js`, y si Multer rechaza un archivo por tamaño (`LIMIT_FILE_SIZE`), `error-handler.middleware.js` lo traduce a la misma estructura de error que el resto de la API en vez de dejar pasar el error crudo de Multer.
+
+### Subir un documento de usuario
+
+```bash
+curl -X POST http://localhost:8080/api/users/665f28f19c1d4e5f6a7b8c91/documents \
+  -F "documentType=dni" \
+  -F "document=@dni-maria.pdf"
+```
+
+`documentType` tiene que ser uno de `dni`, `licencia_de_conducir` o `comprobante_domicilio` (`USER_DOCUMENT_TYPES` en `src/constants/index.js`). La respuesta es el usuario completo con su array `documents` actualizado. Si falta el archivo, el `documentType` no es válido, el tipo de archivo no está permitido, el usuario no existe, o el archivo pesa de más — responde el error correspondiente (`FILE_REQUIRED`, `INVALID_DOCUMENT_TYPE`, `INVALID_FILE_TYPE`, `NOT_FOUND` o `FILE_TOO_LARGE`) y, si Multer ya había escrito el archivo en disco antes de que la validación fallara, el controller lo borra — no queda tirado ahí.
+
+### Subir el comprobante de un pedido
+
+```bash
+curl -X POST http://localhost:8080/api/orders/665f2a3b9c1d4e5f6a7b8c9e/receipt \
+  -F "receipt=@comprobante.jpg"
+```
+
+Acá no hace falta `documentType`, solo el archivo. La respuesta es el pedido completo con su array `receipts` actualizado.
+
+### Qué queda logueado
+
+Una carga exitosa deja un `info` (`"documento \"dni\" cargado para el usuario ..."` / `"comprobante cargado para el pedido ..."`). Cualquier error de carga —archivo faltante, tipo no permitido, documentType inválido, entidad inexistente— ya pasa por `error-handler.middleware.js` como cualquier otro error de la API, así que queda registrado como `warning` sin necesidad de loguearlo a mano en el service.

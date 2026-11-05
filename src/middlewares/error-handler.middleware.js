@@ -1,5 +1,6 @@
 import { AppError, ERROR_CODES } from '../errors/index.js';
-import { ValidationError, ConflictError } from '../errors/domain-errors.js';
+import { ValidationError, ConflictError, FileTooLargeError } from '../errors/domain-errors.js';
+import { MAX_FILE_SIZE } from '../config/upload.config.js';
 import { logger } from '../config/logger.config.js';
 
 // Traduce fallas que no son nuestras (Mongoose, body-parser) a un AppError,
@@ -21,6 +22,11 @@ const translateKnownDriverError = (error) => {
 
   if (error.name === 'CastError') {
     return new ValidationError(`El valor "${error.value}" no tiene un formato valido para "${error.path}"`);
+  }
+
+  if (error.name === 'MulterError') {
+    if (error.code === 'LIMIT_FILE_SIZE') return new FileTooLargeError(MAX_FILE_SIZE);
+    return new ValidationError(`Error al procesar el archivo: ${error.message}`);
   }
 
   return null;

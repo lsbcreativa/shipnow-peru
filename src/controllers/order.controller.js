@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { orderService } from '../services/order.service.js';
 import { successResponse } from '../utils/http-response.js';
 
@@ -34,6 +35,16 @@ export const updateOrderStatus = async (req, res, next) => {
     const order = await orderService.updateStatus(req.params.id, req.body.status);
     successResponse(res, 200, order);
   } catch (error) {
+    next(error);
+  }
+};
+
+export const uploadOrderReceipt = async (req, res, next) => {
+  try {
+    const order = await orderService.addReceipt(req.params.id, req.file);
+    successResponse(res, 201, order);
+  } catch (error) {
+    if (req.file) fs.unlink(req.file.path, () => {});
     next(error);
   }
 };

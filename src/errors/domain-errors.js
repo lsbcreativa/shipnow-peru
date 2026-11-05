@@ -51,3 +51,39 @@ export class MockSeedError extends AppError {
     );
   }
 }
+
+export class FileRequiredError extends AppError {
+  constructor(fieldName) {
+    super(ERROR_CODES.FILE_REQUIRED, `Falta subir un archivo en el campo "${fieldName}"`);
+  }
+}
+
+export class InvalidFileTypeError extends AppError {
+  constructor(mimeType, allowedTypes) {
+    super(
+      ERROR_CODES.INVALID_FILE_TYPE,
+      `El tipo de archivo "${mimeType}" no esta permitido. Usa uno de: ${allowedTypes.join(', ')}.`
+    );
+  }
+}
+
+export class FileTooLargeError extends AppError {
+  constructor(maxBytes) {
+    super(ERROR_CODES.FILE_TOO_LARGE, `El archivo supera el tamaño maximo permitido (${Math.round(maxBytes / (1024 * 1024))}MB)`);
+  }
+}
+
+export class InvalidDocumentTypeError extends AppError {
+  constructor(documentType, validTypes) {
+    super(
+      ERROR_CODES.INVALID_DOCUMENT_TYPE,
+      `El tipo de documento "${documentType}" no es valido. Usa uno de: ${validTypes.join(', ')}.`
+    );
+  }
+}
+
+export class FileStorageError extends AppError {
+  constructor(originalError) {
+    super(ERROR_CODES.FILE_STORAGE_FAILED, `No se pudo guardar el archivo: ${originalError.message}`);
+  }
+}

@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { listUsers, getUser, createUser, updateUser, deleteUser } from '../controllers/user.controller.js';
+import { listUsers, getUser, createUser, updateUser, deleteUser, uploadUserDocument } from '../controllers/user.controller.js';
+import { userDocumentUpload } from '../config/upload.config.js';
 
 const router = Router();
 
@@ -8,5 +9,6 @@ router.get('/:id', getUser);
 router.post('/', createUser);
 router.put('/:id', updateUser);
 router.delete('/:id', deleteUser);
+router.post('/:id/documents', userDocumentUpload, uploadUserDocument);
 
 export default router;

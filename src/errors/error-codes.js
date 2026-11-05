@@ -6,6 +6,11 @@ export const ERROR_CODES = Object.freeze({
   INVALID_MOCK_QUANTITY: 'INVALID_MOCK_QUANTITY',
   INVALID_MOCK_COLLECTION: 'INVALID_MOCK_COLLECTION',
   MOCK_SEED_FAILED: 'MOCK_SEED_FAILED',
+  FILE_REQUIRED: 'FILE_REQUIRED',
+  INVALID_FILE_TYPE: 'INVALID_FILE_TYPE',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  INVALID_DOCUMENT_TYPE: 'INVALID_DOCUMENT_TYPE',
+  FILE_STORAGE_FAILED: 'FILE_STORAGE_FAILED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 });
 
@@ -39,6 +44,26 @@ export const ERROR_DICTIONARY = Object.freeze({
   [ERROR_CODES.MOCK_SEED_FAILED]: {
     statusCode: 500,
     defaultMessage: 'No se pudo completar la carga de datos de prueba en MongoDB',
+  },
+  [ERROR_CODES.FILE_REQUIRED]: {
+    statusCode: 400,
+    defaultMessage: 'Falta subir un archivo',
+  },
+  [ERROR_CODES.INVALID_FILE_TYPE]: {
+    statusCode: 400,
+    defaultMessage: 'El tipo de archivo no esta permitido',
+  },
+  [ERROR_CODES.FILE_TOO_LARGE]: {
+    statusCode: 400,
+    defaultMessage: 'El archivo supera el tamaño maximo permitido',
+  },
+  [ERROR_CODES.INVALID_DOCUMENT_TYPE]: {
+    statusCode: 400,
+    defaultMessage: 'El tipo de documento no es valido',
+  },
+  [ERROR_CODES.FILE_STORAGE_FAILED]: {
+    statusCode: 500,
+    defaultMessage: 'No se pudo guardar el archivo en el servidor',
   },
   [ERROR_CODES.INTERNAL_ERROR]: {
     statusCode: 500,

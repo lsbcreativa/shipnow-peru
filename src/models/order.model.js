@@ -10,6 +10,18 @@ const orderItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const receiptSchema = new mongoose.Schema(
+  {
+    originalName: { type: String, required: true },
+    storedName: { type: String, required: true },
+    path: { type: String, required: true },
+    mimeType: { type: String, required: true },
+    size: { type: Number, required: true },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const orderSchema = new mongoose.Schema(
   {
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -33,6 +45,7 @@ const orderSchema = new mongoose.Schema(
       enum: Object.values(ORDER_PRIORITY),
       default: ORDER_PRIORITY.MEDIUM,
     },
+    receipts: { type: [receiptSchema], default: [] },
   },
   { timestamps: true }
 );

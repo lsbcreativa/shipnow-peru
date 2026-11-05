@@ -1,5 +1,18 @@
 import mongoose from 'mongoose';
-import { ROLES } from '../constants/index.js';
+import { ROLES, USER_DOCUMENT_TYPES } from '../constants/index.js';
+
+const documentSchema = new mongoose.Schema(
+  {
+    originalName: { type: String, required: true },
+    storedName: { type: String, required: true },
+    path: { type: String, required: true },
+    mimeType: { type: String, required: true },
+    size: { type: Number, required: true },
+    documentType: { type: String, enum: Object.values(USER_DOCUMENT_TYPES), required: true },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
 
 const userSchema = new mongoose.Schema(
   {
@@ -10,9 +23,10 @@ const userSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: Object.values(ROLES),
-      default: ROLES.USER,
+      default: ROLES.CLIENTE,
     },
     isActive: { type: Boolean, default: true },
+    documents: { type: [documentSchema], default: [] },
   },
   { timestamps: true }
 );

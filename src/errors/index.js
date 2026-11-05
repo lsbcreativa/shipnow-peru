@@ -8,4 +8,9 @@ export {
   InvalidMockQuantityError,
   InvalidMockCollectionError,
   MockSeedError,
+  FileRequiredError,
+  InvalidFileTypeError,
+  FileTooLargeError,
+  InvalidDocumentTypeError,
+  FileStorageError,
 } from './domain-errors.js';

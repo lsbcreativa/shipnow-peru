@@ -21,6 +21,11 @@ class OrderRepository {
     return this.findById(id);
   }
 
+  async addReceipt(id, receipt) {
+    await OrderModel.findByIdAndUpdate(id, { $push: { receipts: receipt } }, { runValidators: true });
+    return this.findById(id);
+  }
+
   async insertMany(orders) {
     return OrderModel.insertMany(orders);
   }
