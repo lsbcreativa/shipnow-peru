@@ -195,7 +195,8 @@ shipnow-peru/
 │   └── docs.test.js
 ├── uploads/                                 # se crea sola al subir el primer archivo, no va al repo (ver Carga de archivos)
 ├── logs/                                   # se crea solo al arrancar, no va al repo (ver Logging)
-├── Dockerfile                               # ver Producción y Docker
+├── Dockerfile                               # multi-stage: deps -> runtime (ver Producción y Docker)
+├── docker-compose.yml                       # api + mongo, con healthcheck
 ├── .dockerignore
 ├── .mocharc.json
 ├── .env.example
@@ -616,6 +617,8 @@ Antes esto era puro `console.log` repartido por donde sea. Ahora todo pasa por u
 
 En desarrollo (`NODE_ENV=development`) se ve todo, incluido `debug`. En producción se filtra desde `info` para arriba por defecto — esto lo decide `logger.config.js` leyendo `config.nodeEnv`. Si hace falta subir el detalle en producción sin tocar código ni redeployar (por ejemplo para investigar algo puntual), la variable opcional `LOG_LEVEL` pisa esa decisión.
 
+La consola **solo se usa en desarrollo** (`NODE_ENV=development`). En producción y durante los tests (`NODE_ENV=test`) el logger no imprime nada por consola — todo queda en los archivos, no hace falta ensuciar la salida del proceso ni mezclar logs con lo que corre arriba (PM2, Docker, systemd, lo que sea).
+
 ¿Dónde se usa, puntualmente?
 
 - `server.js` y `db.config.js` loguean el arranque: servidor levantado (`info`), conexión a Mongo ok (`info`) o si falla, `fatal` y se corta el proceso.
@@ -625,7 +628,12 @@ En desarrollo (`NODE_ENV=development`) se ve todo, incluido `debug`. En producci
 
 ### Archivos y rotación
 
-Solo los niveles `error` y `fatal` quedan guardados en disco, en `logs/error-<fecha>.log` (uno por día, gracias a `winston-daily-rotate-file`). Se guardan 14 días y después se borran solos. La carpeta `logs/` está en el `.gitignore` — se crea sola la primera vez que corre el server, no hace falta crearla a mano ni subirla al repo.
+Dos archivos, los dos rotados por día (`winston-daily-rotate-file`, 14 días de retención y después se borran solos):
+
+- `logs/error-<fecha>.log` — solo `error` y `fatal`.
+- `logs/combined-<fecha>.log` — toda la actividad que ese entorno tiene habilitada (en desarrollo, hasta `debug`; en producción, desde `info`).
+
+La carpeta `logs/` está en el `.gitignore` — se crea sola la primera vez que corre el server, no hace falta crearla a mano ni subirla al repo.
 
 ### Probarlo
 
@@ -648,6 +656,9 @@ Dispara los 6 niveles de una. En la consola se ven todos (si estás en desarroll
 cat logs/error-*.log
 # 2026-10-07 11:18:19 [error] log de prueba - nivel error
 # 2026-10-07 11:18:19 [fatal] log de prueba - nivel fatal
+
+cat logs/combined-*.log
+# ahi si aparecen los 6 niveles, con el resto de la actividad del servidor
 ```
 
 ## Documentación con Swagger
@@ -656,6 +667,8 @@ cat logs/error-*.log
 npm run dev
 # y abrís http://localhost:8080/api/docs en el navegador
 ```
+
+(Nota de vocabulario: en ShipNow, lo que en otros proyectos del curso se llama "envío"/"tracking" es el **Pedido** — `/api/orders`, con su cambio de estado en `PATCH /orders/:id/status`. Es el mismo concepto, nombrado consistente con el resto del proyecto desde el Módulo 2.)
 
 Ahí está Swagger UI, con toda la API probable desde el navegador (botón "Try it out" en cada endpoint). El spec de OpenAPI está escrito a mano en `src/config/swagger.config.js` — ni swagger-jsdoc ni nada que lea comentarios de las rutas, es un objeto JS que arma la doc entera, y las rutas (`src/routes/*.routes.js`) no tienen ni idea de que esto existe. Lo único que toca rutas es `docs.routes.js`, y lo único que hace es montar `swagger-ui-express` apuntando al spec.
 
@@ -796,7 +809,7 @@ curl http://localhost:8080/api/health
 
 Solo eso: estado, entorno, segundos que lleva corriendo el proceso, y timestamp. Nada de `MONGODB_URI`, puertos internos, ni ningún otro dato que no debería salir de la API.
 
-### Docker
+### Docker, solo con `docker build`/`docker run`
 
 ```bash
 # construir la imagen
@@ -813,13 +826,44 @@ docker run -p 8080:8080 \
   shipnow-peru
 ```
 
-El `Dockerfile` usa `node:20-alpine`, instala las dependencias con `npm ci` (reproducible, usa el `package-lock.json`), copia solo `src/` (no `tests/`, no el `.git`, nada de eso — ver `.dockerignore`), expone el puerto `8080` y corre `node src/server.js` como el usuario `node` (no root). Igual que corriendo con Node directo, si falta una variable obligatoria (`PORT`, `MONGODB_URI`, `NODE_ENV`) el proceso tira el error descriptivo de `env.config.js` y el contenedor se cae al toque — no hay forma de que quede arriba "a medias".
+Así necesitás una MongoDB propia (local, Atlas, lo que sea) — este modo no levanta Mongo por vos. Si `MONGODB_URI` apunta a `localhost`, desde **dentro** del contenedor eso no es tu máquina — o usás Atlas (lo más simple), o `host.docker.internal` en vez de `localhost`, o el `docker-compose.yml` de abajo, que ya resuelve esto.
 
-> No pude probar el `docker build`/`docker run` en este entorno porque no tengo Docker instalado para correrlo — repasé el Dockerfile a mano con cuidado, pero te recomiendo correr esos comandos una vez en tu máquina antes de darlo por cerrado.
+El `Dockerfile` es multi-stage: una etapa `deps` instala las dependencias con `npm ci` (reproducible, usa el `package-lock.json`) y una etapa final que copia ese `node_modules` ya instalado más `src/` (no `tests/`, no el `.git` — ver `.dockerignore`), expone el puerto `8080` y corre `node src/server.js` como el usuario `node`, no root. Honestamente: como todas las dependencias del proyecto (incluidas las de testing, ver [Testing](#testing)) son necesarias en algún momento, separar en dos etapas no reduce el tamaño final acá — pero sí separa "instalar" de "correr" en capas distintas, que es lo que pide la consigna y lo que conviene si el día de mañana se agregan dependencias que de verdad solo hacen falta para build.
 
-Si `MONGODB_URI` apunta a `localhost`, desde **dentro** del contenedor eso no es tu máquina — o usás MongoDB Atlas (la opción más simple), o levantás Mongo en otro contenedor y los conectás por red de Docker (`--network`), o usás `host.docker.internal` en vez de `localhost` según tu sistema.
+Igual que corriendo con Node directo, si falta una variable obligatoria (`PORT`, `MONGODB_URI`, `NODE_ENV`) el proceso tira el error descriptivo de `env.config.js` y el contenedor se cae al toque — no hay forma de que quede arriba "a medias".
 
 `.dockerignore` deja afuera de la imagen: `node_modules`, `.env` (y cualquier `.env.*`), `.git`, `logs/`, `uploads/`, `tests/`, y archivos temporales — nada de esto tiene que viajar dentro de la imagen.
+
+### Docker, con `docker-compose` (API + MongoDB)
+
+Esta es la forma más simple de levantar todo: no hace falta tener Mongo instalado ni una URI externa.
+
+```bash
+docker compose up --build
+```
+
+`docker-compose.yml` define dos servicios:
+
+- **`mongo`**: la imagen oficial `mongo:7`, con un `healthcheck` que corre `mongosh --eval "db.adminCommand('ping')"` cada 5 segundos.
+- **`api`**: se construye desde el `Dockerfile` de este repo, y tiene `depends_on: mongo: condition: service_healthy` — Docker Compose no arranca el contenedor de la API hasta que el healthcheck de Mongo pase, así que ShipNow nunca intenta conectarse a una base que todavía no está lista.
+
+`MONGODB_URI` ya queda resuelto adentro del compose (`mongodb://mongo:27017/shipnow_peru`, usando el nombre del servicio como host) — no hace falta tocarlo. `PORT`, `NODE_ENV` y `LOG_LEVEL` sí se pueden ajustar: `docker-compose.yml` los lee de variables de entorno del shell o de un `.env` en la misma carpeta (la sintaxis `${NODE_ENV:-development}` cae en `development` si no está seteada). Por ejemplo, para probarlo "como en producción" (con mocks y el endpoint de prueba del logger deshabilitados):
+
+```bash
+NODE_ENV=production docker compose up --build
+```
+
+El puerto de Mongo (`27017`) queda publicado al host para poder conectarse con Compass o `mongosh` mientras probás — en un despliegue real no haría falta exponerlo así, alcanzaría con que lo vea la API dentro de la red interna de Docker.
+
+```bash
+# apagar todo
+docker compose down
+
+# apagar y borrar tambien los datos de Mongo
+docker compose down -v
+```
+
+> No pude correr `docker build`, `docker run` ni `docker compose up` en este entorno porque no tengo Docker instalado para probarlo — repasé el `Dockerfile` y el `docker-compose.yml` línea por línea a mano, pero te recomiendo correr estos comandos una vez en tu máquina antes de darlo por cerrado.
 
 ### Qué no se sube al repo (ni a la imagen)
 

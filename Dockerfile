@@ -1,10 +1,15 @@
-FROM node:20-alpine
-
+# ---- deps: instala dependencias en una capa separada, aprovecha el cache de Docker ----
+FROM node:20-alpine AS deps
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm ci
 
+# ---- runtime: imagen final, solo lo que hace falta para correr la API ----
+FROM node:20-alpine
+WORKDIR /app
+
+COPY package*.json ./
+COPY --from=deps /app/node_modules ./node_modules
 COPY src ./src
 
 # uploads/ y logs/ los crea la app sola la primera vez que los necesita
