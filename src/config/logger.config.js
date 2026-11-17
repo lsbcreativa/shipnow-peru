@@ -22,7 +22,7 @@ const logsDir = path.join(process.cwd(), 'logs');
 
 export const logger = winston.createLogger({
   levels,
-  level: config.nodeEnv === 'production' ? 'info' : 'debug',
+  level: config.logLevel || (config.nodeEnv === 'production' ? 'info' : 'debug'),
   transports: [
     new winston.transports.Console({
       format: winston.format.combine(timestamp, winston.format.colorize({ all: true }), lineFormat),

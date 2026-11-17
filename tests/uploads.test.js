@@ -59,6 +59,20 @@ describe('POST /api/users/:id/documents', () => {
 
     expectError(res, { status: 404, code: 'NOT_FOUND', messageIncludes: 'usuario' });
   });
+
+  it('un id armado para escapar de uploads/ se rechaza antes de que Multer toque el filesystem', async () => {
+    // el id se usa para armar la carpeta de destino en upload.config.js, asi
+    // que tiene que ser rechazado por formato (no un objectid valido) antes
+    // de llegar a Multer -- si esto alguna vez responde 201, algo escribio
+    // afuera de uploads/
+    const res = await agent()
+      .post('/api/users/..%2f..%2f..%2fmalicious/documents')
+      .field('documentType', 'dni')
+      .attach('document', pdfBuffer, { filename: 'x.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).to.be.oneOf([400, 404]);
+    expect(res.body.status).to.equal('error');
+  });
 });
 
 describe('POST /api/orders/:id/receipt', () => {

@@ -22,6 +22,8 @@ API REST para **ShipNow Perú**, una plataforma de venta y despacho de productos
 - [Documentación con Swagger](#documentación-con-swagger)
 - [Testing](#testing)
 - [Carga de archivos](#carga-de-archivos)
+- [Performance](#performance)
+- [Producción y Docker](#producción-y-docker)
 
 ## Temática
 
@@ -45,6 +47,7 @@ La plataforma maneja estas entidades:
 | Pre-entrega 5 | Documentación interactiva con Swagger (`/api/docs`): info general, tags, schemas reutilizables y errores reales documentados | Completada |
 | Pre-entrega 6 | CRUD real de Pedidos (`/api/orders`), y una suite de tests funcionales con Mocha, Chai y Supertest contra una MongoDB de prueba en memoria | Completada |
 | Pre-entrega 7 | Carga de archivos con Multer: documentos de usuario y comprobantes de pedido, guardados en disco con sus metadatos en Mongo | Completada |
+| Pre-entrega 8 | Repaso de performance, configuración por entorno (`LOG_LEVEL`, endpoints internos deshabilitados en producción) y Docker (`Dockerfile` + `.dockerignore`) | Completada |
 
 Las siguientes fases (autenticación, permisos por rol, asignación real de repartidores, etc.) se van a ir sumando en las próximas entregas del curso.
 
@@ -63,6 +66,7 @@ Las siguientes fases (autenticación, permisos por rol, asignación real de repa
 | mongodb-memory-server | MongoDB efímera para correr los tests sin depender de una base externa |
 | swagger-ui-express | Documentación interactiva de la API en `/api/docs` |
 | Multer | Carga de archivos (documentos de usuario, comprobantes de pedido) |
+| Docker | Contenerización de la API para correrla igual en cualquier lado |
 
 ## Instalación
 
@@ -80,11 +84,14 @@ Copia el archivo de ejemplo y completa los valores:
 cp .env.example .env
 ```
 
-| Variable | Descripción | Valor de ejemplo |
-|---|---|---|
-| `PORT` | Puerto donde escucha el servidor | `8080` |
-| `NODE_ENV` | Entorno de ejecución | `development` |
-| `MONGODB_URI` | Cadena de conexión a MongoDB | `mongodb://localhost:27017/shipnow_peru` |
+| Variable | Obligatoria | Descripción | Valor de ejemplo |
+|---|---|---|---|
+| `PORT` | Sí | Puerto donde escucha el servidor | `8080` |
+| `NODE_ENV` | Sí | Entorno de ejecución (`development`, `test` o `production`) | `development` |
+| `MONGODB_URI` | Sí | Cadena de conexión a MongoDB | `mongodb://localhost:27017/shipnow_peru` |
+| `LOG_LEVEL` | No | Fuerza el nivel mínimo del logger (`fatal`/`error`/`warning`/`info`/`http`/`debug`). Sin esto, se decide solo según `NODE_ENV` | `info` |
+
+ShipNow todavía no tiene login ni consume ningún servicio externo, así que no hay `JWT_SECRET` ni URLs de terceros por ahora — quedan comentadas en `.env.example`, documentadas para el día que se agreguen, en vez de inventarlas sin uso real.
 
 `MONGODB_URI` acepta tanto una instancia local como MongoDB Atlas:
 
@@ -165,7 +172,8 @@ shipnow-peru/
 │   │   └── docs.routes.js                  # monta swagger-ui-express en /api/docs
 │   ├── middlewares/
 │   │   ├── not-found.middleware.js         # arma un NotFoundError y lo delega (no responde directo)
-│   │   └── error-handler.middleware.js     # unico lugar de todo el proyecto que arma una respuesta de error
+│   │   ├── error-handler.middleware.js     # unico lugar de todo el proyecto que arma una respuesta de error
+│   │   └── validate-object-id.middleware.js # valida el :id ANTES de Multer en las rutas de carga (ver Carga de archivos)
 │   ├── errors/
 │   │   ├── error-codes.js                  # diccionario: codigo -> { statusCode, defaultMessage }
 │   │   ├── app-error.js                    # clase base, arma el error a partir de un codigo del diccionario
@@ -187,6 +195,8 @@ shipnow-peru/
 │   └── docs.test.js
 ├── uploads/                                 # se crea sola al subir el primer archivo, no va al repo (ver Carga de archivos)
 ├── logs/                                   # se crea solo al arrancar, no va al repo (ver Logging)
+├── Dockerfile                               # ver Producción y Docker
+├── .dockerignore
 ├── .mocharc.json
 ├── .env.example
 ├── .gitignore
@@ -276,7 +286,7 @@ Todas las rutas cuelgan del prefijo `/api`.
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/health` | Verifica que el servidor esté activo |
+| GET | `/api/health` | Estado, entorno, uptime y timestamp — sin nada sensible |
 | GET | `/api/products` | Lista productos, con filtros por `category`, `city`, `status` y paginación (`page`, `limit`) |
 | GET | `/api/products/:id` | Detalle de un producto |
 | POST | `/api/products` | Crea un producto nuevo |
@@ -293,14 +303,16 @@ Todas las rutas cuelgan del prefijo `/api`.
 | PATCH | `/api/orders/:id/status` | Cambia el estado del pedido (un pedido `cancelled` no admite más cambios) |
 | POST | `/api/users/:id/documents` | Sube un documento del usuario (`document`, multipart) con su `documentType` |
 | POST | `/api/orders/:id/receipt` | Sube el comprobante de un pedido (`receipt`, multipart) |
-| GET | `/api/mocks/users?qty=N` | Genera `N` usuarios simulados (`cliente`/`repartidor`), sin guardarlos |
-| GET | `/api/mocks/repartidores?qty=N` | Genera `N` usuarios simulados, todos con rol `repartidor`, sin guardarlos |
-| GET | `/api/mocks/pedidos?qty=N` | Genera `N` pedidos simulados con su cliente embebido, sin guardarlos |
-| GET | `/api/mocks/entregas?qty=N` | Genera `N` entregas simuladas con su pedido y, si corresponde, su repartidor, sin guardarlos |
-| POST | `/api/mocks/seed?qty=N&coleccion=X` | Inserta `N` registros de prueba reales en MongoDB (`usuarios`, `repartidores`, `pedidos` o `entregas`) |
-| GET | `/api/logs/test` | Dispara un log de cada nivel (debug/http/info/warning/error/fatal), para chequear que el logger anda bien |
+| GET | `/api/mocks/users?qty=N` | Genera `N` usuarios simulados (`cliente`/`repartidor`), sin guardarlos — **deshabilitado en producción** |
+| GET | `/api/mocks/repartidores?qty=N` | Genera `N` usuarios simulados, todos con rol `repartidor`, sin guardarlos — **deshabilitado en producción** |
+| GET | `/api/mocks/pedidos?qty=N` | Genera `N` pedidos simulados con su cliente embebido, sin guardarlos — **deshabilitado en producción** |
+| GET | `/api/mocks/entregas?qty=N` | Genera `N` entregas simuladas con su pedido y, si corresponde, su repartidor, sin guardarlos — **deshabilitado en producción** |
+| POST | `/api/mocks/seed?qty=N&coleccion=X` | Inserta `N` registros de prueba reales en MongoDB (`usuarios`, `repartidores`, `pedidos` o `entregas`) — **deshabilitado en producción** |
+| GET | `/api/logs/test` | Dispara un log de cada nivel (debug/http/info/warning/error/fatal), para chequear que el logger anda bien — **deshabilitado en producción** |
 | GET | `/api/docs` | Swagger UI, documentación interactiva de toda esta tabla |
 | GET | `/api/docs/openapi.json` | El spec de OpenAPI en crudo, sin el HTML de Swagger UI alrededor |
+
+Criterio sobre las rutas internas: `/api/mocks/*` y `/api/logs/test` existen para generar datos de prueba y chequear el logger — en `NODE_ENV=production` ni se montan (`src/routes/index.router.js`), así que caen en el 404 genérico como cualquier ruta inexistente. No tiene sentido que alguien pueda sembrar datos falsos sobre una base real, y el endpoint de prueba del logger no aporta nada de negocio. `/api/docs` en cambio queda disponible en todos los entornos: es solo documentación, no toca datos ni ejecuta nada.
 
 ## Ejemplos de uso
 
@@ -602,7 +614,7 @@ Antes esto era puro `console.log` repartido por donde sea. Ahora todo pasa por u
 
 `fatal` · `error` · `warning` · `info` · `http` · `debug`
 
-En desarrollo (`NODE_ENV=development`) se ve todo, incluido `debug`. En producción se filtra desde `info` para arriba — esto lo decide una sola línea en `logger.config.js` leyendo `config.nodeEnv`, que ya viene validado desde el Módulo 1.
+En desarrollo (`NODE_ENV=development`) se ve todo, incluido `debug`. En producción se filtra desde `info` para arriba por defecto — esto lo decide `logger.config.js` leyendo `config.nodeEnv`. Si hace falta subir el detalle en producción sin tocar código ni redeployar (por ejemplo para investigar algo puntual), la variable opcional `LOG_LEVEL` pisa esa decisión.
 
 ¿Dónde se usa, puntualmente?
 
@@ -666,6 +678,13 @@ npm test
 
 Corre toda la suite de una. Herramientas: **Mocha** organiza y ejecuta, **Chai** hace los `expect(...)`, y **Supertest** manda las peticiones HTTP directo contra la app de Express — sin levantar un puerto real, porque `src/app.js` (la app) está separado de `src/server.js` (el que hace `.listen`). `src/app.js` es justo lo que importan los tests.
 
+`mocha`, `chai`, `supertest` y `mongodb-memory-server` están en `dependencies` (no en `devDependencies`) a propósito: así quedan instalados sin importar qué comando use el entorno que corre la suite — `npm install`, `npm ci`, o incluso `npm ci --omit=dev` (que normalmente se salta las dependencias de desarrollo). Confirmado explícitamente:
+
+```bash
+rm -rf node_modules && npm ci --omit=dev
+npm test   # mocha sigue estando, la suite corre igual
+```
+
 `tests/helpers.js` centraliza dos cosas que antes estaban repetidas entre archivos: `expectError(res, { status, code, messageIncludes })` (chequea siempre el `status` HTTP, el `code` y que el `message` venga, no solo el código) y las factories `createUser`/`createOrder` para armar datos de prueba sin repetir el mismo objeto a mano en cada test.
 
 ### La base de testing
@@ -688,7 +707,7 @@ Antes de **cada** test (no solo entre archivos) se limpian todas las colecciones
 | `users.test.js` | crear, listar con paginación, `limit` inválido, buscar por id, desactivar |
 | `orders.test.js` | crear (con y sin cliente válido), consultar por id, listar, cambiar estado, estado inválido, pedido cancelado |
 | `mocks.test.js` | generar sin guardar los 4 recursos (users/repartidores/pedidos/**entregas**), `qty` inválido, sembrar de verdad, que sembrar entregas dos veces no duplique, colección inválida, los dos errores juntos |
-| `uploads.test.js` | subir documento de usuario (ok, sin archivo, documentType inválido, tipo de archivo inválido, usuario inexistente) y comprobante de pedido (ok, sin archivo, pedido inexistente) |
+| `uploads.test.js` | subir documento de usuario (ok, sin archivo, documentType inválido, tipo de archivo inválido, usuario inexistente, id armado para escapar de `uploads/`) y comprobante de pedido (ok, sin archivo, pedido inexistente) |
 | `logger.test.js` | que `/api/logs/test` dispare los 6 niveles, y que otro método en esa misma ruta dé 404 |
 | `docs.test.js` | que Swagger UI se sirva en `/api/docs`, que un método no soportado ahí dé 404, y que el `openapi.json` real declare los tags/schemas esperados y que cada ruta que documenta exista de verdad en la API |
 
@@ -701,6 +720,8 @@ Ninguna hace falta en un `.env` propio: `tests/setup.js` las define a mano (`NOD
 ## Carga de archivos
 
 Dos cosas se pueden subir: un **documento de usuario** (DNI, licencia de conducir, comprobante de domicilio) y un **comprobante de pedido** (la foto o el PDF que prueba que el paquete llegó). Todo pasa por [Multer](https://github.com/expressjs/multer), configurado en un solo lugar (`src/config/upload.config.js`) que no sabe nada de rutas ni de controllers — define dónde se guarda cada cosa, cómo se nombra el archivo en disco, qué tipos se aceptan y el tamaño máximo. Las rutas solo importan el middleware ya armado, igual que importan un controller.
+
+El `id` de la URL se usa para armar la carpeta de destino en disco (`uploads/users/<id>/...`), así que `validate-object-id.middleware.js` lo valida **antes** de que Multer lo toque — si no es un ObjectId válido, responde `400` sin que Multer llegue a escribir nada. Si esa validación viviera después (en el Service, como el resto de las validaciones de negocio), un `id` armado a mano tipo `../../../etc` ya habría logrado escribir fuera de `uploads/` antes de que nadie se diera cuenta.
 
 ```
 uploads/
@@ -734,3 +755,80 @@ Acá no hace falta `documentType`, solo el archivo. La respuesta es el pedido co
 ### Qué queda logueado
 
 Una carga exitosa deja un `info` (`"documento \"dni\" cargado para el usuario ..."` / `"comprobante cargado para el pedido ..."`). Cualquier error de carga —archivo faltante, tipo no permitido, documentType inválido, entidad inexistente— ya pasa por `error-handler.middleware.js` como cualquier otro error de la API, así que queda registrado como `warning` sin necesidad de loguearlo a mano en el service.
+
+## Performance
+
+Repaso rápido de lo que ya estaba resuelto en módulos anteriores, más lo que se ajustó en esta entrega:
+
+- **Nada de listas sin control.** `/products`, `/users` y `/orders` pasan por `parsePagination` (`src/utils/pagination.js`): `limit` tiene un tope de 100 aunque lo pidas más alto, y por defecto son 10. Los endpoints de mocks (`qty`) tienen su propio tope de 50. No hay ningún endpoint que devuelva "todo" sin paginar.
+- **Sin operaciones sincrónicas bloqueando el Event Loop.** `upload.config.js` usaba `fs.mkdirSync` para crear la carpeta de cada archivo subido — en esta entrega se cambió a `fs.mkdir` (async). Es la única operación de filesystem sincrónica que había en el proyecto (`grep -rn "Sync(" src` ya no encuentra nada).
+- **Logs con criterio, no ruido.** Solo se loguea lo que ayuda a investigar algo (arranque, errores, cargas, cambios de stock) — no cada request ni cada consulta a la base. El nivel se puede ajustar con `LOG_LEVEL` sin tocar código.
+- **La carga de archivos ya tenía límites** desde el Módulo 7 (tipo de archivo, 5MB máximo, `uploads/` fuera del repo) — ver [Carga de archivos](#carga-de-archivos). Lo que se sumó ahora es la validación del `id` de la URL *antes* de que Multer toque el filesystem (ver esa misma sección): antes se armaba la carpeta de destino con el `id` crudo de la URL sin validar nada primero.
+
+## Producción y Docker
+
+### Correr todo, paso a paso
+
+```bash
+# local, con Node
+git clone https://github.com/lsbcreativa/shipnow-peru.git
+cd shipnow-peru
+cp .env.example .env    # completar MONGODB_URI como mínimo
+npm install
+npm run dev              # http://localhost:8080
+
+# tests
+npm test
+
+# swagger
+# con el server corriendo, abrís http://localhost:8080/api/docs
+```
+
+### Health check
+
+```bash
+curl http://localhost:8080/api/health
+```
+
+```json
+{ "status": "success", "environment": "development", "uptime": 134.21, "timestamp": "2026-11-17T12:00:00.000Z" }
+```
+
+Solo eso: estado, entorno, segundos que lleva corriendo el proceso, y timestamp. Nada de `MONGODB_URI`, puertos internos, ni ningún otro dato que no debería salir de la API.
+
+### Docker
+
+```bash
+# construir la imagen
+docker build -t shipnow-peru .
+
+# correrla, pasando las variables de entorno desde un archivo
+docker run -p 8080:8080 --env-file .env shipnow-peru
+
+# o una por una
+docker run -p 8080:8080 \
+  -e PORT=8080 \
+  -e NODE_ENV=production \
+  -e MONGODB_URI="mongodb+srv://usuario:contraseña@cluster.mongodb.net/shipnow_peru" \
+  shipnow-peru
+```
+
+El `Dockerfile` usa `node:20-alpine`, instala las dependencias con `npm ci` (reproducible, usa el `package-lock.json`), copia solo `src/` (no `tests/`, no el `.git`, nada de eso — ver `.dockerignore`), expone el puerto `8080` y corre `node src/server.js` como el usuario `node` (no root). Igual que corriendo con Node directo, si falta una variable obligatoria (`PORT`, `MONGODB_URI`, `NODE_ENV`) el proceso tira el error descriptivo de `env.config.js` y el contenedor se cae al toque — no hay forma de que quede arriba "a medias".
+
+> No pude probar el `docker build`/`docker run` en este entorno porque no tengo Docker instalado para correrlo — repasé el Dockerfile a mano con cuidado, pero te recomiendo correr esos comandos una vez en tu máquina antes de darlo por cerrado.
+
+Si `MONGODB_URI` apunta a `localhost`, desde **dentro** del contenedor eso no es tu máquina — o usás MongoDB Atlas (la opción más simple), o levantás Mongo en otro contenedor y los conectás por red de Docker (`--network`), o usás `host.docker.internal` en vez de `localhost` según tu sistema.
+
+`.dockerignore` deja afuera de la imagen: `node_modules`, `.env` (y cualquier `.env.*`), `.git`, `logs/`, `uploads/`, `tests/`, y archivos temporales — nada de esto tiene que viajar dentro de la imagen.
+
+### Qué no se sube al repo (ni a la imagen)
+
+| Carpeta/archivo | Por qué |
+|---|---|
+| `node_modules/` | Se reconstruye con `npm install`/`npm ci` |
+| `.env` | Tiene (o puede tener) datos reales de conexión |
+| `logs/` | Se genera solo, es ruido de ejecución, no código |
+| `uploads/` | Son los archivos que suben los usuarios, no artefactos del proyecto |
+| `coverage/` | No se usa en este proyecto, pero si algún día se agrega medición de cobertura, tampoco va |
+
+Todo esto está en `.gitignore` (repo) y en `.dockerignore` (imagen) a la vez.

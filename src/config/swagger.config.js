@@ -248,8 +248,8 @@ export const swaggerSpec = {
     { name: 'Users', description: 'Usuarios de la plataforma (clientes y repartidores)' },
     { name: 'Orders', description: 'Pedidos: CRUD basico (crear, listar, ver por id, cambiar estado)' },
     { name: 'Deliveries', description: 'Entregas. Todavia no tienen CRUD propio, solo existen via el modulo de mocks' },
-    { name: 'Mocks', description: 'Generacion y carga de datos de prueba (usuarios, repartidores, pedidos, entregas)' },
-    { name: 'Logger', description: 'Endpoint de diagnostico del sistema de logs, no es logica de negocio' },
+    { name: 'Mocks', description: 'Generacion y carga de datos de prueba. Deshabilitado en produccion (NODE_ENV=production)' },
+    { name: 'Logger', description: 'Endpoint de diagnostico del sistema de logs, no es logica de negocio. Deshabilitado en produccion' },
   ],
   components: { schemas },
   paths: {
@@ -257,13 +257,22 @@ export const swaggerSpec = {
       get: {
         tags: ['Health'],
         summary: 'Ver si el servidor esta activo',
+        description: 'No expone nada sensible: ni la URI de Mongo, ni el puerto interno, ni ningun secreto.',
         responses: {
           200: {
             description: 'OK',
             content: {
               'application/json': {
-                schema: { type: 'object', properties: { status: { type: 'string' }, message: { type: 'string' } } },
-                example: { status: 'success', message: 'ShipNow Peru esta en linea' },
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string', example: 'success' },
+                    environment: { type: 'string', example: 'production' },
+                    uptime: { type: 'number', description: 'segundos desde que arranco el proceso', example: 134.21 },
+                    timestamp: { type: 'string', format: 'date-time' },
+                  },
+                },
+                example: { status: 'success', environment: 'production', uptime: 134.21, timestamp: '2026-11-17T12:00:00.000Z' },
               },
             },
           },

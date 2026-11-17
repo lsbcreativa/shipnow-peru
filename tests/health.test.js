@@ -2,12 +2,16 @@ import { expect } from 'chai';
 import { agent, expectError } from './helpers.js';
 
 describe('GET /api/health', () => {
-  it('responde que el servidor esta arriba', async () => {
+  it('responde el estado, entorno, uptime y timestamp, sin nada sensible', async () => {
     const res = await agent().get('/api/health');
 
     expect(res.status).to.equal(200);
     expect(res.body.status).to.equal('success');
-    expect(res.body.message).to.be.a('string');
+    expect(res.body.environment).to.equal('test');
+    expect(res.body.uptime).to.be.a('number');
+    expect(res.body.timestamp).to.be.a('string');
+    // nada de uri de mongo, puerto interno, etc.
+    expect(res.body).to.not.have.any.keys('mongoUri', 'port', 'secret');
   });
 });
 

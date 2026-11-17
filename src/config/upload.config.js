@@ -14,9 +14,10 @@ export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const buildStorage = (subfolder) =>
   multer.diskStorage({
     destination: (req, file, cb) => {
-      const dir = path.join(UPLOADS_ROOT, subfolder, req.params.id || 'sin-id');
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
+      // para esta altura el id ya paso por validateObjectIdParam, asi que
+      // no puede traer ../ ni nada raro
+      const dir = path.join(UPLOADS_ROOT, subfolder, req.params.id);
+      fs.mkdir(dir, { recursive: true }, (error) => cb(error, dir));
     },
     filename: (req, file, cb) => {
       cb(null, `${crypto.randomUUID()}${path.extname(file.originalname)}`);
